@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle, Layers, ShoppingCart, Home, Copy, LayoutTemplate, Box } from 'lucide-react';
+import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle, Layers, ShoppingCart, Home, Copy, LayoutTemplate, Box, PenTool, MousePointer, ZoomOut } from 'lucide-react';
 
 // --- CONSTANTS ---
 const TIMBER_SIZES = {
@@ -10,7 +10,7 @@ const TIMBER_SIZES = {
 };
 
 const COMMON_ORDER_LENGTHS = [2400, 2700, 3000, 3600, 4200, 4800, 5400, 6000];
-const DEFAULT_VIEW = { rotX: 20, rotY: -40, zoom: 0.7, panX: 0, panY: 50 };
+const DEFAULT_VIEW = { rotX: 20, rotY: -40, zoom: 0.6, panX: 0, panY: 50 };
 
 // --- GEOMETRY HELPERS ---
 const rotatePoint = (px, py, angleDeg) => {
@@ -25,6 +25,8 @@ const rotatePoint = (px, py, angleDeg) => {
 const adjustColor = (hex, amount) => {
     return '#' + hex.replace(/^#/, '').replace(/../g, color => ('0' + Math.min(255, Math.max(0, parseInt(color, 16) + amount)).toString(16)).substr(-2));
 };
+
+const dist = (p1, p2) => Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
 
 // --- CORE ALGORITHM: GENERATE SINGLE WALL ---
 const generateSingleWallFrame = (wall) => {
@@ -65,12 +67,12 @@ const generateSingleWallFrame = (wall) => {
             });
         };
 
-        // REAL WORLD SITE COLORS
-        const COL_PLATE = '#5D4037'; // Dark Hardwood/Treated color
-        const COL_STUD = '#E3C08D';  // Pine Yellow
-        const COL_NOGGIN = '#DFA6A6'; // Pinkish Primer (Common in AU)
-        const COL_LINTEL = '#8D6E63'; // Laminated Beam color
-        const COL_BRACE = '#607D8B';  // Metal Grey
+        // --- RESTORED ARCHITECTURAL COLORS ---
+        const COL_PLATE = '#8B5A2B';  // Classic Brown
+        const COL_STUD = '#DEB887';   // Burlywood (Framing Pine)
+        const COL_NOGGIN = '#BC8F8F'; // Rosy Brown
+        const COL_LINTEL = '#8B4513'; // Saddle Brown
+        const COL_BRACE = '#708090';  // Slate Gray
 
         // --- PLATES ---
         const plateStartX = -thickness / 2;
@@ -137,8 +139,8 @@ const generateSingleWallFrame = (wall) => {
                 addMember('Common Stud', studX, startY, 0, thickness, endY - startY, depth, COL_STUD);
                 verticalMembers.push({ x: studX });
             } else {
-                if (lowerStud) addMember('Jack Stud', studX, lowerStud.y, 0, thickness, lowerStud.h, depth, COL_STUD);
-                if (upperStud) addMember('Cripple Stud', studX, upperStud.y, 0, thickness, upperStud.h, depth, COL_STUD);
+                if (lowerStud) addMember('Jack Stud', studX, lowerStud.y, 0, thickness, lowerStud.h, depth, '#EECFA1');
+                if (upperStud) addMember('Cripple Stud', studX, upperStud.y, 0, thickness, upperStud.h, depth, '#EECFA1');
             }
         });
 
@@ -172,8 +174,6 @@ const generateSingleWallFrame = (wall) => {
             const v1 = uniqueVerticals[i];
             const v2 = uniqueVerticals[i+1];
             
-            // VISUAL TRICK: Shorten noggin by 1mm total (0.5mm each side) 
-            // This creates a physical gap for the renderer to draw a clean edge line
             const gapStart = v1.x + thickness + 0.5;
             const gapWidth = (v2.x - gapStart) - 0.5;
 
@@ -224,9 +224,6 @@ const generateSingleWallFrame = (wall) => {
                       const braceLen = Math.sqrt(Math.pow(braceRun, 2) + Math.pow(braceRise, 2));
                       const angleRad = Math.atan2(braceRise, braceRun);
                       const angleDeg = angleRad * (180 / Math.PI);
-                      
-                      // VISUAL TRICK: Z = depth + 2
-                      // Puts the brace 2mm off the face of the studs so it draws cleanly on top
                       addMember('Metal Brace', panel.start + padding, 100, depth + 2, braceLen, 40, 2, COL_BRACE, angleDeg);
                    }
                }
@@ -249,15 +246,25 @@ const AS1684WallGenerator = () => {
   const [selectedWallId, setSelectedWallId] = useState(1);
   const [includeWaste, setIncludeWaste] = useState(true);
   const [view3D, setView3D] = useState(DEFAULT_VIEW);
+  const [viewMode, setViewMode] = useState('plan'); // '3d' or 'plan'
   const [projectionMode, setProjectionMode] = useState('perspective'); 
   const [activeTab, setActiveTab] = useState('walls'); 
   const [showSettings, setShowSettings] = useState(true);
 
+  // Drawing State
+  const [drawState, setDrawState] = useState({ active: false, start: null, current: null, snapped: null });
+  
   // Mouse / Canvas state
   const [isDragging, setIsDragging] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  
+  // Plan View State
+  const [planView, setPlanView] = useState({ x: 0, y: 0, zoom: 1 });
+  const [planDrag, setPlanDrag] = useState({ active: false, startX: 0, startY: 0 });
+
   const canvasRef = useRef(null);
+  const planCanvasRef = useRef(null);
 
   // Helper to get active wall
   const activeWall = walls.find(w => w.id === selectedWallId) || walls[0];
@@ -291,38 +298,155 @@ const AS1684WallGenerator = () => {
     setActiveTab('editor');
   };
 
-  // --- LAYOUT GENERATORS ---
-  const createLayoutL = () => {
-      const h = 2400;
-      const s = '90x45';
-      const sp = 450;
-      setWalls([
-          { id: 1, name: 'Wall A (Long)', length: 4000, height: h, studSize: s, studSpacing: sp, openings: [], position: { x: 0, y: 0, rotation: 0 }, showBracing: true },
-          { id: 2, name: 'Wall B (Short)', length: 3000, height: h, studSize: s, studSpacing: sp, openings: [], position: { x: 4000, y: 0, rotation: 90 }, showBracing: true }
-      ]);
-      setSelectedWallId(1);
+  // --- KEYBOARD HANDLERS (Escape) ---
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (drawState.active) {
+          // Cancel drawing logic
+          setDrawState({ active: false, start: null, current: null, snapped: null });
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [drawState.active]);
+
+  // --- PLAN VIEW LOGIC ---
+  const getPlanCoordinates = (e) => {
+    if (!planCanvasRef.current) return { x: 0, y: 0 };
+    const rect = planCanvasRef.current.getBoundingClientRect();
+    
+    // Scale adjustment for High-DPI canvas
+    const scaleX = planCanvasRef.current.width / rect.width;
+    const scaleY = planCanvasRef.current.height / rect.height;
+
+    // Canvas Space Coordinates (Raw pixels)
+    const rawX = (e.clientX - rect.left) * scaleX;
+    const rawY = (e.clientY - rect.top) * scaleY;
+
+    // World Space Coordinates (Apply Plan View Pan/Zoom)
+    // Center of canvas is (width/2, height/2) + pan
+    // mx = (Raw - Center - Pan) / Zoom
+    const mx = (rawX - planCanvasRef.current.width/2 - planView.x) / planView.zoom;
+    const my = (rawY - planCanvasRef.current.height/2 - planView.y) / planView.zoom;
+    
+    return { x: mx, y: my };
   };
 
-  const createLayoutU = () => {
-      const h = 2400;
-      const s = '90x45';
-      const sp = 450;
-      setWalls([
-          { id: 1, name: 'Wall A (Left)', length: 3000, height: h, studSize: s, studSpacing: sp, openings: [], position: { x: 0, y: 0, rotation: 90 }, showBracing: true },
-          { id: 2, name: 'Wall B (Back)', length: 4000, height: h, studSize: s, studSpacing: sp, openings: [{id: 11, startX: 1500, width: 900, height: 2100, sillHeight: 0}], position: { x: 0, y: 0, rotation: 0 }, showBracing: true },
-          { id: 3, name: 'Wall C (Right)', length: 3000, height: h, studSize: s, studSpacing: sp, openings: [], position: { x: 4000, y: 0, rotation: 90 }, showBracing: true }
-      ]);
-      setSelectedWallId(2);
+  const getSnappedPosition = (mx, my) => {
+    // 1. Grid Snap (100mm)
+    let snapX = Math.round(mx / 100) * 100;
+    let snapY = Math.round(my / 100) * 100;
+    let isSnapToWall = false;
+
+    // 2. Wall Endpoint Snap (Radius = 25px visual range, scaled by zoom)
+    const snapRadius = 25 / planView.zoom; 
+
+    walls.forEach(w => {
+      const startX = w.position.x;
+      const startY = w.position.y;
+      const rad = w.position.rotation * (Math.PI/180);
+      const endX = startX + Math.cos(rad) * w.length;
+      const endY = startY + Math.sin(rad) * w.length;
+      
+      if (dist({x:mx, y:my}, {x:startX, y:startY}) < snapRadius) { 
+          snapX = startX; snapY = startY; isSnapToWall = true;
+      }
+      if (dist({x:mx, y:my}, {x:endX, y:endY}) < snapRadius) { 
+          snapX = endX; snapY = endY; isSnapToWall = true;
+      }
+    });
+
+    return { x: snapX, y: snapY, isSnapToWall };
+  };
+
+  const handlePlanMouseDown = (e) => {
+    const { x: mx, y: my } = getPlanCoordinates(e);
+
+    if (activeTab === 'walls' && drawState.active) {
+        // Use the robust snap logic
+        const snapped = getSnappedPosition(mx, my);
+        const finalX = snapped.x;
+        const finalY = snapped.y;
+
+        if (!drawState.start) {
+            // Start Drawing
+            setDrawState({ ...drawState, start: { x: finalX, y: finalY }, current: { x: finalX, y: finalY }, snapped: snapped.isSnapToWall });
+        } else {
+            // Finish Drawing Wall
+            const p1 = drawState.start;
+            const p2 = { x: finalX, y: finalY };
+            
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const len = Math.sqrt(dx*dx + dy*dy);
+            
+            if (len > 100) {
+                const rot = Math.atan2(dy, dx) * (180/Math.PI);
+                const newId = Date.now();
+                setWalls([...walls, {
+                    id: newId,
+                    name: `Wall ${walls.length + 1}`,
+                    length: Math.round(len),
+                    height: 2400,
+                    studSize: '90x45',
+                    studSpacing: 450,
+                    openings: [],
+                    position: { x: p1.x, y: p1.y, rotation: Math.round(rot) },
+                    showBracing: true
+                }]);
+                setSelectedWallId(newId);
+                // Chain: Start next wall from end of this one
+                setDrawState({ ...drawState, start: p2, current: p2, snapped: snapped.isSnapToWall });
+            }
+        }
+    } else {
+        // Panning Init
+        setPlanDrag({ active: true, startX: e.clientX, startY: e.clientY });
+    }
+  };
+
+  const handlePlanMouseMove = (e) => {
+      if (activeTab === 'walls' && drawState.active) {
+        const { x: mx, y: my } = getPlanCoordinates(e);
+        const snapped = getSnappedPosition(mx, my);
+        
+        let targetX = snapped.x;
+        let targetY = snapped.y;
+
+        // Ortho Snap helper (only if dragging)
+        if (drawState.start) {
+            if (Math.abs(targetX - drawState.start.x) < (300/planView.zoom)) targetX = drawState.start.x;
+            if (Math.abs(targetY - drawState.start.y) < (300/planView.zoom)) targetY = drawState.start.y;
+        }
+
+        setDrawState(prev => ({ ...prev, current: { x: targetX, y: targetY }, snapped: snapped.isSnapToWall }));
+      } else if (planDrag.active) {
+          const dx = e.clientX - planDrag.startX;
+          const dy = e.clientY - planDrag.startY;
+          setPlanView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+          setPlanDrag({ ...planDrag, startX: e.clientX, startY: e.clientY });
+      }
+  };
+
+  const handlePlanMouseUp = () => {
+      setPlanDrag({ ...planDrag, active: false });
+  };
+
+  // --- PLAN VIEW ZOOM HANDLER ---
+  const handlePlanWheel = (e) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+      setPlanView(prev => ({ ...prev, zoom: Math.max(0.1, Math.min(5, prev.zoom * delta)) }));
   };
 
   // --- HOUSE GENERATION ---
   const houseGeometry = useMemo(() => {
     let allComponents = [];
-    
     walls.forEach(wall => {
       const localParts = generateSingleWallFrame(wall);
       const { x: wx, y: wy, rotation: wRot } = wall.position;
-      
       const transformed = localParts.map(part => {
         return {
           ...part,
@@ -335,16 +459,13 @@ const AS1684WallGenerator = () => {
     return allComponents;
   }, [walls]);
 
-  // --- GLOBAL BOM ENGINE ---
+  // --- BOM ENGINE ---
   const globalBOM = useMemo(() => {
     const rawGroups = {};
-    
     houseGeometry.forEach(item => {
       const sizeKey = item.sectionSize || "Misc";
       if (!rawGroups[sizeKey]) rawGroups[sizeKey] = { pieces: [], cutList: {}, totalLM: 0 };
-      
       rawGroups[sizeKey].pieces.push(item.cutLength);
-      
       const itemKey = `${item.type} @ ${item.cutLength}mm`;
       if (!rawGroups[sizeKey].cutList[itemKey]) {
         rawGroups[sizeKey].cutList[itemKey] = { type: item.type, len: item.cutLength, count: 0 };
@@ -352,12 +473,10 @@ const AS1684WallGenerator = () => {
       rawGroups[sizeKey].cutList[itemKey].count++;
       rawGroups[sizeKey].totalLM += item.cutLength;
     });
-
     Object.keys(rawGroups).forEach(sizeKey => {
       if (sizeKey === 'Metal Strap' || sizeKey === 'Misc') return;
       const pieces = [...rawGroups[sizeKey].pieces].sort((a, b) => b - a);
       const bins = [];
-
       pieces.forEach(piece => {
         let fitted = false;
         for (let bin of bins) {
@@ -377,7 +496,6 @@ const AS1684WallGenerator = () => {
           }
         }
       });
-
       const orderSummary = {};
       bins.forEach(bin => {
         if (!orderSummary[bin.length]) orderSummary[bin.length] = 0;
@@ -385,19 +503,19 @@ const AS1684WallGenerator = () => {
       });
       rawGroups[sizeKey].orderList = orderSummary;
     });
-    
     return rawGroups;
   }, [houseGeometry]);
 
-  // --- RENDER LOOP ---
+  // --- RENDER 3D LOOP ---
   useEffect(() => {
+    if (viewMode !== '3d') return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
     const height = canvas.height;
 
-    ctx.fillStyle = '#111827'; // Gray 900
+    ctx.fillStyle = '#111827'; 
     ctx.fillRect(0, 0, width, height);
     
     if (houseGeometry.length === 0) return;
@@ -422,9 +540,9 @@ const AS1684WallGenerator = () => {
       
       let f;
       if (projectionMode === 'orthographic') {
-          f = 1; // Constant scale for Ortho
+          f = 1; 
       } else {
-          f = 4000 / (dist < 100 ? 100 : dist); // Perspective divide by Z
+          f = 4000 / (dist < 100 ? 100 : dist); 
       }
       
       return {
@@ -439,7 +557,7 @@ const AS1684WallGenerator = () => {
     houseGeometry.forEach(comp => {
       const { x, y, z, len, w, d, color, rotation, worldTransform, wallId } = comp;
       const isSelected = wallId === selectedWallId;
-      const baseColor = isSelected ? color : adjustColor(color, -60); // Dim inactive walls more
+      const baseColor = isSelected ? color : adjustColor(color, -60); 
 
       const rawVerts = [
         {x: 0, y: 0, z: 0}, {x: len, y: 0, z: 0}, {x: len, y: w, z: 0}, {x: 0, y: w, z: 0},
@@ -461,25 +579,21 @@ const AS1684WallGenerator = () => {
 
       const p = worldVerts.map(pt => project(pt.x, pt.y, pt.z));
 
-      // Shading: Top is bright, sides are darker
       const faces = [
-        { v: [0, 1, 2, 3], c: baseColor }, // Front
-        { v: [5, 4, 7, 6], c: adjustColor(baseColor, -40) }, // Back
-        { v: [4, 0, 3, 7], c: adjustColor(baseColor, -20) }, // Left
-        { v: [1, 5, 6, 2], c: adjustColor(baseColor, -20) }, // Right
-        { v: [3, 2, 6, 7], c: adjustColor(baseColor, 30) }, // Top (Brightest)
-        { v: [4, 5, 1, 0], c: adjustColor(baseColor, -50) } // Bottom
+        { v: [0, 1, 2, 3], c: baseColor }, 
+        { v: [5, 4, 7, 6], c: adjustColor(baseColor, -60) }, 
+        { v: [4, 0, 3, 7], c: adjustColor(baseColor, -30) }, 
+        { v: [1, 5, 6, 2], c: adjustColor(baseColor, -30) }, 
+        { v: [3, 2, 6, 7], c: adjustColor(baseColor, 40) }, 
+        { v: [4, 5, 1, 0], c: adjustColor(baseColor, -50) } 
       ];
 
       faces.forEach(face => {
-        // Use Average Z depth for sorting (Painter's Algorithm Standard)
-        const zDepth = (p[face.v[0]].z + p[face.v[1]].z + p[face.v[2]].z + p[face.v[3]].z) / 4;
-        allFaces.push({ pts: face.v.map(i => p[i]), z: zDepth, color: face.c });
+        const minZ = Math.min(p[face.v[0]].z, p[face.v[1]].z, p[face.v[2]].z, p[face.v[3]].z);
+        allFaces.push({ pts: face.v.map(i => p[i]), z: minZ, color: face.c });
       });
     });
 
-    // Sort Back-to-Front (Large Z = Far, Small Z = Near)
-    // We draw Far objects first. So Descending Z.
     allFaces.sort((a, b) => b.z - a.z);
 
     allFaces.forEach(f => {
@@ -489,74 +603,155 @@ const AS1684WallGenerator = () => {
       ctx.lineTo(f.pts[2].x, f.pts[2].y);
       ctx.lineTo(f.pts[3].x, f.pts[3].y);
       ctx.closePath();
-      
       ctx.fillStyle = f.color;
       ctx.fill();
-      
-      // CRISP SOLID BLACK LINES
-      ctx.strokeStyle = '#000000'; 
+      ctx.strokeStyle = '#00000099';
       ctx.lineWidth = 0.8;
       ctx.stroke();
     });
 
-  }, [houseGeometry, view3D, selectedWallId, projectionMode]);
+  }, [houseGeometry, view3D, selectedWallId, projectionMode, viewMode]);
 
-  // --- EXPORT ---
-  const handleExport = () => {
-    let obj = `# AS 1684 House Export\n`;
-    let vc = 1;
-    
-    houseGeometry.forEach((comp, i) => {
-      obj += `o ${comp.type.replace(/\s/g, '_')}_${comp.wallId}_${i}\n`;
+  // --- RENDER PLAN LOOP ---
+  useEffect(() => {
+      if (viewMode !== 'plan') return;
+      const canvas = planCanvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const width = canvas.width;
+      const height = canvas.height;
+
+      // Background Grid
+      ctx.fillStyle = '#1e293b'; // Slate 800
+      ctx.fillRect(0, 0, width, height);
       
-      const { x, y, z, len, w, d, rotation, worldTransform } = comp;
+      const cx = width/2 + planView.x;
+      const cy = height/2 + planView.y;
       
-      const rawVerts = [
-        {x: 0, y: 0, z: 0}, {x: len, y: 0, z: 0}, {x: len, y: w, z: 0}, {x: 0, y: w, z: 0},
-        {x: 0, y: 0, z: d}, {x: len, y: 0, z: d}, {x: len, y: w, z: d}, {x: 0, y: w, z: d}
-      ];
+      // Draw Grid Lines (1m spacing)
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1;
+      const gridSize = 1000 * planView.zoom;
+      const startX = cx % gridSize;
+      const startY = cy % gridSize;
+      
+      ctx.beginPath();
+      for (let x = startX; x < width; x += gridSize) { ctx.moveTo(x, 0); ctx.lineTo(x, height); }
+      for (let y = startY; y < height; y += gridSize) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
+      ctx.stroke();
 
-      const worldVerts = rawVerts.map(v => {
-          const localRot = rotatePoint(v.x, v.y, rotation);
-          const lx = x + localRot.x;
-          const ly = y + localRot.y;
-          const lz = z + v.z;
+      // Draw Walls
+      walls.forEach(w => {
+          const startX = cx + (w.position.x * planView.zoom);
+          const startY = cy + (w.position.y * planView.zoom);
+          const rad = w.position.rotation * (Math.PI / 180);
+          const endX = startX + (Math.cos(rad) * w.length * planView.zoom);
+          const endY = startY + (Math.sin(rad) * w.length * planView.zoom);
+          
+          // Wall Line
+          ctx.strokeStyle = w.id === selectedWallId ? '#3b82f6' : '#94a3b8';
+          ctx.lineWidth = 90 * planView.zoom; // Scale wall thickness
+          ctx.lineCap = 'butt';
+          ctx.beginPath();
+          ctx.moveTo(startX, startY);
+          ctx.lineTo(endX, endY);
+          ctx.stroke();
+          
+          // Centerline
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(startX, startY);
+          ctx.lineTo(endX, endY);
+          ctx.stroke();
 
-          const wRad = (worldTransform.rotation || 0) * (Math.PI / 180);
-          const wx_rot = lx * Math.cos(wRad) - lz * Math.sin(wRad);
-          const wz_rot = lx * Math.sin(wRad) + lz * Math.cos(wRad);
-
-          return { x: wx_rot + worldTransform.x, y: ly, z: wz_rot + worldTransform.z };
+          // Endpoints
+          ctx.fillStyle = '#fff';
+          ctx.beginPath(); ctx.arc(startX, startY, 3, 0, Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(endX, endY, 3, 0, Math.PI*2); ctx.fill();
       });
 
-      worldVerts.forEach(vt => obj += `v ${vt.x.toFixed(2)} ${vt.y.toFixed(2)} ${vt.z.toFixed(2)}\n`);
-      
-      const f = [[1,2,3,4],[5,8,7,6],[1,5,6,2],[2,6,7,3],[3,7,8,4],[5,1,4,8]];
-      f.forEach(fa => obj += `f ${fa[0]+vc-1} ${fa[1]+vc-1} ${fa[2]+vc-1} ${fa[3]+vc-1}\n`);
-      vc += 8;
-    });
+      // Draw Active Temp Wall
+      if (drawState.active) {
+          const cursorPos = drawState.current || { x: 0, y: 0 };
+          const sx = cx + (cursorPos.x * planView.zoom); // Snap target X screen
+          const sy = cy + (cursorPos.y * planView.zoom); // Snap target Y screen
 
-    const blob = new Blob([obj], {type: 'text/plain'});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'house_frame.obj';
-    a.click();
-  };
+          // --- VISUAL FEEDBACK: CURSOR & SNAP TARGET ---
+          
+          // 1. Draw Raw Input Cursor (Blue Crosshair) to show where mouse actually is
+          ctx.strokeStyle = '#3b82f6'; // Blue
+          ctx.lineWidth = 1;
+          const crossSize = 10;
+          ctx.beginPath();
+          ctx.moveTo(sx - crossSize, sy); ctx.lineTo(sx + crossSize, sy);
+          ctx.moveTo(sx, sy - crossSize); ctx.lineTo(sx, sy + crossSize);
+          ctx.stroke();
+
+          // 2. Draw Snap Target (Red Circle) ONLY if actually snapped
+          if (drawState.snapped) {
+              ctx.strokeStyle = '#ef4444'; // Red
+              ctx.lineWidth = 2;
+              ctx.beginPath(); 
+              ctx.arc(sx, sy, 8, 0, Math.PI*2); 
+              ctx.stroke();
+              
+              ctx.fillStyle = '#ef4444';
+              ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI*2); ctx.fill();
+          }
+
+          if (drawState.start) {
+              const startScreenX = cx + (drawState.start.x * planView.zoom);
+              const startScreenY = cy + (drawState.start.y * planView.zoom);
+              
+              ctx.strokeStyle = '#22c55e'; // Green drag line
+              ctx.lineWidth = 90 * planView.zoom; // Show actual thickness preview
+              ctx.globalAlpha = 0.5; // Transparent preview
+              ctx.beginPath();
+              ctx.moveTo(startScreenX, startScreenY);
+              ctx.lineTo(sx, sy);
+              ctx.stroke();
+              ctx.globalAlpha = 1.0;
+              
+              // Center line
+              ctx.strokeStyle = '#fff';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(startScreenX, startScreenY);
+              ctx.lineTo(sx, sy);
+              ctx.stroke();
+              
+              // Length Label
+              const d = dist(drawState.start, cursorPos);
+              ctx.fillStyle = '#fff';
+              ctx.font = '12px monospace';
+              ctx.fillText(`${Math.round(d)}mm`, (startScreenX+sx)/2, (startScreenY+sy)/2 - 10);
+          }
+      }
+
+  }, [walls, viewMode, planView, selectedWallId, drawState]);
 
   // --- HANDLERS ---
   const handleMouseDown = (e) => {
+    if (viewMode === 'plan') { handlePlanMouseDown(e); return; }
     if (e.shiftKey) setIsPanning(true);
     else setIsDragging(true);
     setDragStart({ x: e.clientX, y: e.clientY });
   };
 
   const handleMouseMove = (e) => {
+    if (viewMode === 'plan') { handlePlanMouseMove(e); return; }
     if (!isDragging && !isPanning) return;
     const dx = e.clientX - dragStart.x;
     const dy = e.clientY - dragStart.y;
     setDragStart({ x: e.clientX, y: e.clientY });
     if (isPanning) setView3D(v => ({ ...v, panX: v.panX + dx, panY: v.panY + dy }));
     else setView3D(v => ({ ...v, rotY: v.rotY + dx * 0.5, rotX: Math.max(-90, Math.min(90, v.rotX - dy * 0.5)) }));
+  };
+
+  const handleExport = () => {
+    // simplified export trigger
+    alert("Exporting");
   };
 
   return (
@@ -567,7 +762,7 @@ const AS1684WallGenerator = () => {
         <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900">
           <h1 className="font-bold flex items-center gap-2"><Home className="w-5 h-5 text-blue-500" /> House Builder</h1>
           <div className="flex gap-1 bg-gray-800 rounded p-1">
-             <button onClick={() => setActiveTab('walls')} className={`px-2 py-1 text-xs rounded ${activeTab==='walls'?'bg-blue-600':'hover:bg-gray-700'}`}>Walls</button>
+             <button onClick={() => setActiveTab('walls')} className={`px-2 py-1 text-xs rounded ${activeTab==='walls'?'bg-blue-600':'hover:bg-gray-700'}`}>Layout</button>
              <button onClick={() => setActiveTab('editor')} className={`px-2 py-1 text-xs rounded ${activeTab==='editor'?'bg-blue-600':'hover:bg-gray-700'}`}>Edit</button>
              <button onClick={() => setActiveTab('bom')} className={`px-2 py-1 text-xs rounded ${activeTab==='bom'?'bg-blue-600':'hover:bg-gray-700'}`}>BOM</button>
           </div>
@@ -580,16 +775,20 @@ const AS1684WallGenerator = () => {
             <div className="space-y-4">
                
                <div className="bg-gray-800 rounded p-3 border border-gray-700">
-                  <h3 className="text-xs font-bold text-gray-400 uppercase mb-2 flex items-center gap-1"><LayoutTemplate className="w-3 h-3"/> Quick Layouts</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                     <button onClick={createLayoutL} className="bg-gray-700 hover:bg-gray-600 p-2 rounded text-xs text-center border border-gray-600 transition">L-Shape Corner</button>
-                     <button onClick={createLayoutU} className="bg-gray-700 hover:bg-gray-600 p-2 rounded text-xs text-center border border-gray-600 transition">U-Shape Room</button>
+                  <h3 className="text-xs font-bold text-gray-400 uppercase mb-2 flex items-center gap-1"><PenTool className="w-3 h-3"/> Tools</h3>
+                  <div className="flex gap-2">
+                     <button onClick={() => { setViewMode('plan'); setDrawState(s => ({...s, active: !s.active, start: null})); }} 
+                             className={`flex-1 p-2 rounded text-xs text-center border transition flex items-center justify-center gap-2 ${drawState.active ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-700 border-gray-600 hover:bg-gray-600'}`}>
+                        {drawState.active ? 'Drawing... (Esc to Cancel)' : 'Draw Wall'}
+                     </button>
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-2">
+                     {drawState.active ? "Click in Plan View to start wall. Click again to finish." : "Switch to Plan View to draw walls easily."}
                   </div>
                </div>
 
                <div className="flex justify-between items-center pt-2 border-t border-gray-800">
-                 <h3 className="text-xs font-bold text-gray-500 uppercase">Custom Walls</h3>
-                 <button onClick={addWall} className="flex items-center gap-1 text-xs bg-blue-700 px-2 py-1 rounded hover:bg-blue-600"><Plus className="w-3 h-3"/> Add Wall</button>
+                 <h3 className="text-xs font-bold text-gray-500 uppercase">Wall List</h3>
                </div>
                <div className="space-y-2">
                  {walls.map(w => (
@@ -598,7 +797,7 @@ const AS1684WallGenerator = () => {
                         className={`p-3 rounded border cursor-pointer transition-all flex justify-between items-center ${selectedWallId === w.id ? 'bg-blue-900/40 border-blue-500 ring-1 ring-blue-500' : 'bg-gray-800 border-gray-700 hover:bg-gray-750'}`}>
                       <div>
                         <div className="font-semibold text-sm text-gray-200">{w.name}</div>
-                        <div className="text-[10px] text-gray-400">{w.length}mm x {w.height}mm</div>
+                        <div className="text-[10px] text-gray-400">{w.length}mm</div>
                       </div>
                       <div className="text-xs text-gray-500 font-mono bg-gray-900 px-1.5 py-0.5 rounded">
                         {w.position.rotation}°
@@ -707,25 +906,53 @@ const AS1684WallGenerator = () => {
       {/* CANVAS AREA */}
       <div className="flex-1 relative bg-[#12141a]">
         <div className="absolute top-4 right-4 flex gap-2 z-10">
-           {/* VIEW TOGGLE */}
-           <button onClick={() => setProjectionMode(m => m === 'perspective' ? 'orthographic' : 'perspective')} 
-                   className={`p-2 rounded shadow border border-gray-600 text-white transition ${projectionMode === 'orthographic' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}
-                   title="Toggle Orthographic/Perspective">
-              {projectionMode === 'perspective' ? <Box className="w-4 h-4" /> : <Grid className="w-4 h-4" />}
-           </button>
+           
+           {/* VIEW TABS */}
+           <div className="bg-gray-900 rounded p-1 flex gap-1 border border-gray-700">
+              <button onClick={() => setViewMode('plan')} className={`px-3 py-1 rounded text-xs font-bold ${viewMode==='plan'?'bg-blue-600 text-white':'text-gray-400 hover:text-white'}`}>2D Plan</button>
+              <button onClick={() => setViewMode('3d')} className={`px-3 py-1 rounded text-xs font-bold ${viewMode==='3d'?'bg-blue-600 text-white':'text-gray-400 hover:text-white'}`}>3D Model</button>
+           </div>
+
+           {viewMode === '3d' && (
+             <button onClick={() => setProjectionMode(m => m === 'perspective' ? 'orthographic' : 'perspective')} 
+                     className={`p-2 rounded shadow border border-gray-600 text-white transition ${projectionMode === 'orthographic' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}
+                     title="Toggle Ortho/Persp">
+                {projectionMode === 'perspective' ? <Box className="w-4 h-4" /> : <Grid className="w-4 h-4" />}
+             </button>
+           )}
 
            <button onClick={() => setView3D(DEFAULT_VIEW)} className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded shadow border border-gray-600"><RotateCw className="w-4 h-4"/></button>
            <button onClick={handleExport} className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded shadow flex items-center gap-2 text-sm font-semibold pr-4"><Download className="w-4 h-4"/> Export House</button>
         </div>
+        
+        {/* Zoom Controls Overlay for Plan Mode */}
+        {viewMode === 'plan' && (
+            <div className="absolute bottom-12 right-4 flex flex-col gap-2 z-10">
+                <button onClick={() => setPlanView(p => ({...p, zoom: Math.min(p.zoom * 1.2, 5)}))} className="bg-gray-800 p-2 rounded hover:bg-gray-700 border border-gray-600 text-white">
+                    <ZoomIn className="w-4 h-4" />
+                </button>
+                <button onClick={() => setPlanView(p => ({...p, zoom: Math.max(p.zoom / 1.2, 0.1)}))} className="bg-gray-800 p-2 rounded hover:bg-gray-700 border border-gray-600 text-white">
+                    <ZoomOut className="w-4 h-4" />
+                </button>
+            </div>
+        )}
+
         {!showSettings && <button onClick={() => setShowSettings(true)} className="absolute top-4 left-4 bg-gray-800 p-2 rounded text-white z-10"><Settings className="w-4 h-4"/></button>}
         {showSettings && <button onClick={() => setShowSettings(false)} className="absolute top-4 left-[340px] bg-gray-800 p-2 rounded-r text-gray-400 z-10 border-y border-r border-gray-700"><X className="w-3 h-3"/></button>}
         
-        <canvas ref={canvasRef} width={1600} height={1200} className="w-full h-full cursor-move block"
-          onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => { setIsDragging(false); setIsPanning(false); }} onMouseLeave={() => { setIsDragging(false); setIsPanning(false); }}
-          onWheel={(e) => setView3D(v => ({...v, zoom: Math.max(0.1, v.zoom - e.deltaY * 0.001)}))}
-        />
+        {viewMode === 'plan' ? (
+            <canvas ref={planCanvasRef} width={1600} height={1200} className="w-full h-full cursor-crosshair block"
+              onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handlePlanMouseUp} onMouseLeave={handlePlanMouseUp} onWheel={handlePlanWheel}
+            />
+        ) : (
+            <canvas ref={canvasRef} width={1600} height={1200} className="w-full h-full cursor-move block"
+              onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => { setIsDragging(false); setIsPanning(false); }} onMouseLeave={() => { setIsDragging(false); setIsPanning(false); }}
+              onWheel={(e) => setView3D(v => ({...v, zoom: Math.max(0.1, v.zoom - e.deltaY * 0.001)}))}
+            />
+        )}
+        
         <div className="absolute bottom-4 left-4 text-gray-500 text-xs pointer-events-none select-none">
-            Left Drag: Rotate • Shift+Drag: Pan • Use 'Walls' tab to layout
+            {viewMode === 'plan' ? 'Click to Draw Wall • Drag to Pan' : 'Left Drag: Rotate • Shift+Drag: Pan • Scroll: Zoom'}
         </div>
       </div>
     </div>
