@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle, Layers, ShoppingCart } from 'lucide-react';
 
 // --- HELPERS ---
 const TIMBER_SIZES = {
@@ -8,6 +8,8 @@ const TIMBER_SIZES = {
   '90x45': { d: 90, t: 45, grade: 'MGP10' },
   '140x45': { d: 140, t: 45, grade: 'MGP12' }
 };
+
+const COMMON_ORDER_LENGTHS = [2400, 2700, 3000, 3600, 4200, 4800, 5400, 6000];
 
 const DEFAULT_VIEW = { rotX: 20, rotY: -35, zoom: 0.8, panX: 0, panY: 50 };
 
@@ -23,12 +25,14 @@ const rotatePoint = (px, py, angleDeg) => {
 
 const AS1684WallGenerator = () => {
   // --- STATE ---
+  // Inputs kept as flexible types (string while typing, number from AI)
   const [wallLength, setWallLength] = useState(3600);
   const [wallHeight, setWallHeight] = useState(2400);
   const [studSize, setStudSize] = useState('90x45');
   const [studSpacing, setStudSpacing] = useState(450);
   const [openings, setOpenings] = useState([]);
   const [showBracing, setShowBracing] = useState(true);
+  const [includeWaste, setIncludeWaste] = useState(true);
   const [view3D, setView3D] = useState(DEFAULT_VIEW);
   const [activeTab, setActiveTab] = useState('controls'); 
   const [showSettings, setShowSettings] = useState(true);
@@ -146,75 +150,105 @@ const AS1684WallGenerator = () => {
   // --- LOGIC ENGINE ---
   const generateFrame = useMemo(() => {
     try {
+        // --- INPUT SANITIZATION ---
+        // Ensure inputs are numbers for calculation, regardless of current input state
+        const numWallLen = parseFloat(wallLength) || 0;
+        const numWallHeight = parseFloat(wallHeight) || 0;
+        const numSpacing = parseFloat(studSpacing) || 450;
+
         const { d: depth, t: thickness } = TIMBER_SIZES[studSize] || TIMBER_SIZES['90x45'];
         const components = [];
         const verticalMembers = []; 
 
         const addMember = (type, x, y, z, len, w, d_dim, color, rotation = 0) => {
+          
+          let cutLength = 0;
+          let sectionSize = "";
+
+          if (type.includes('Stud')) {
+             cutLength = w;
+             sectionSize = `${d_dim}x${Math.round(len)}`;
+          } else if (type.includes('Plate') || type.includes('Noggin') || type.includes('Sill') || type.includes('Trimmer')) {
+             cutLength = len;
+             sectionSize = `${d_dim}x${Math.round(w)}`;
+          } else if (type.includes('Lintel')) {
+             cutLength = len;
+             sectionSize = `${Math.round(w)}x${d_dim}`;
+          } else if (type.includes('Brace')) {
+             cutLength = len;
+             sectionSize = "Metal Strap";
+          }
+
           components.push({
             id: Math.random().toString(36).substr(2, 9),
-            type, x, y, z, len, w, d: d_dim, color, rotation
+            type, x, y, z, len, w, d: d_dim, color, rotation,
+            cutLength: Math.round(cutLength),
+            sectionSize
           });
         };
 
         // A. PLATES
         const plateStartX = -thickness / 2;
-        const fullPlateLength = wallLength + thickness;
+        const fullPlateLength = numWallLen + thickness;
 
         // Bottom Plate Logic
         let currentX = plateStartX;
-        const sortedOpenings = [...openings].sort((a, b) => a.startX - b.startX);
-        const doorOpenings = sortedOpenings.filter(o => o.sillHeight === 0);
+        const sortedOpenings = [...openings].sort((a, b) => (parseFloat(a.startX)||0) - (parseFloat(b.startX)||0));
+        const doorOpenings = sortedOpenings.filter(o => (parseFloat(o.sillHeight)||0) === 0);
         
         if (doorOpenings.length === 0) {
           addMember('Bottom Plate', plateStartX, 0, 0, fullPlateLength, thickness, depth, '#8B5A2B');
         } else {
           let plateX = plateStartX;
           doorOpenings.forEach(door => {
-            // FIX: Extend plate to the clear opening edge (door.startX) so it supports the Jamb Stud
-            const doorCutStart = door.startX; 
+            const dStart = parseFloat(door.startX) || 0;
+            const dWidth = parseFloat(door.width) || 0;
             
+            const doorCutStart = dStart;
             if (doorCutStart > plateX) {
               addMember('Bottom Plate', plateX, 0, 0, doorCutStart - plateX, thickness, depth, '#8B5A2B');
             }
-            // Resume plate at the end of the clear opening
-            plateX = door.startX + door.width;
+            plateX = dStart + dWidth;
           });
-          const finalPlateEnd = wallLength + thickness/2;
+          const finalPlateEnd = numWallLen + thickness/2;
           if (plateX < finalPlateEnd) {
             addMember('Bottom Plate', plateX, 0, 0, finalPlateEnd - plateX, thickness, depth, '#8B5A2B');
           }
         }
 
         // Top Plates
-        addMember('Top Plate (Lower)', plateStartX, wallHeight - (thickness * 2), 0, fullPlateLength, thickness, depth, '#A0522D');
-        addMember('Top Plate (Upper)', plateStartX, wallHeight - thickness, 0, fullPlateLength, thickness, depth, '#A0522D');
+        addMember('Top Plate (Lower)', plateStartX, numWallHeight - (thickness * 2), 0, fullPlateLength, thickness, depth, '#A0522D');
+        addMember('Top Plate (Upper)', plateStartX, numWallHeight - thickness, 0, fullPlateLength, thickness, depth, '#A0522D');
 
         // B. STUDS
         const gridPositions = [];
-        const safeSpacing = Math.max(100, studSpacing); 
-        for (let x = 0; x <= wallLength; x += safeSpacing) gridPositions.push(x);
-        if (gridPositions[gridPositions.length - 1] !== wallLength) gridPositions.push(wallLength);
+        const safeSpacing = Math.max(100, numSpacing); 
+        for (let x = 0; x <= numWallLen; x += safeSpacing) gridPositions.push(x);
+        if (gridPositions[gridPositions.length - 1] !== numWallLen) gridPositions.push(numWallLen);
 
         gridPositions.forEach(xPos => {
           let startY = thickness;
-          let endY = wallHeight - (thickness * 2);
+          let endY = numWallHeight - (thickness * 2);
           let isDeleted = false;
           let lowerStud = null;
           let upperStud = null;
 
           for (const op of openings) {
-            const opStart = op.startX;
-            const opEnd = op.startX + op.width;
+            const opStart = parseFloat(op.startX) || 0;
+            const opWidth = parseFloat(op.width) || 0;
+            const opHeight = parseFloat(op.height) || 0;
+            const opSill = parseFloat(op.sillHeight) || 0;
+            const opEnd = opStart + opWidth;
+
             if (xPos > opStart + 10 && xPos < opEnd - 10) {
               isDeleted = true;
-              if (op.sillHeight > 0) {
-                lowerStud = { y: thickness, h: op.sillHeight - thickness };
+              if (opSill > 0) {
+                lowerStud = { y: thickness, h: opSill - thickness };
               }
-              let lintelDepth = op.width > 1200 ? 190 : 140; 
-              const spaceAbove = (wallHeight - (thickness * 2)) - (op.sillHeight + op.height + lintelDepth);
+              let lintelDepth = opWidth > 1200 ? 190 : 140; 
+              const spaceAbove = (numWallHeight - (thickness * 2)) - (opSill + opHeight + lintelDepth);
               if (spaceAbove > 20) {
-                 upperStud = { y: op.sillHeight + op.height + lintelDepth, h: spaceAbove };
+                 upperStud = { y: opSill + opHeight + lintelDepth, h: spaceAbove };
               }
               break;
             }
@@ -233,26 +267,30 @@ const AS1684WallGenerator = () => {
 
         // C. OPENINGS
         openings.forEach(op => {
-          const { startX, width, height, sillHeight } = op;
-          let lintelDepth = width > 1200 ? 190 : 140;
-          const headHeight = sillHeight + height;
+          const opStart = parseFloat(op.startX) || 0;
+          const opWidth = parseFloat(op.width) || 0;
+          const opHeight = parseFloat(op.height) || 0;
+          const opSill = parseFloat(op.sillHeight) || 0;
+
+          let lintelDepth = opWidth > 1200 ? 190 : 140;
+          const headHeight = opSill + opHeight;
           
-          const leftJambX = startX - thickness;
+          const leftJambX = opStart - thickness;
           addMember('Jamb Stud', leftJambX, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, '#CD853F');
           verticalMembers.push({ x: leftJambX, type: 'jamb' });
 
-          const rightJambX = startX + width;
+          const rightJambX = opStart + opWidth;
           addMember('Jamb Stud', rightJambX, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, '#CD853F');
           verticalMembers.push({ x: rightJambX, type: 'jamb' });
 
-          addMember('Lintel', startX - thickness, headHeight, 0, width + (thickness * 2), lintelDepth, depth, '#8B4513');
-          if (sillHeight > 0) addMember('Sill Trimmer', startX, sillHeight, 0, width, thickness, depth, '#A0522D');
+          addMember('Lintel', opStart - thickness, headHeight, 0, opWidth + (thickness * 2), lintelDepth, depth, '#8B4513');
+          if (opSill > 0) addMember('Sill Trimmer', opStart, opSill, 0, opWidth, thickness, depth, '#A0522D');
         });
 
         // D. NOGGINS
         verticalMembers.sort((a, b) => a.x - b.x);
         const uniqueVerticals = verticalMembers.filter((v, i, a) => i === 0 || Math.abs(v.x - a[i-1].x) > 1);
-        const nogginCenter = wallHeight / 2;
+        const nogginCenter = numWallHeight / 2;
 
         for (let i = 0; i < uniqueVerticals.length - 1; i++) {
             const v1 = uniqueVerticals[i];
@@ -266,9 +304,14 @@ const AS1684WallGenerator = () => {
             const midX = (gapStart + gapEnd) / 2;
             let insideOpening = false;
             for (const op of openings) {
-                if (midX > op.startX && midX < op.startX + op.width) {
-                    const opTop = op.sillHeight + op.height;
-                    const opBottom = op.sillHeight;
+                const opStart = parseFloat(op.startX) || 0;
+                const opWidth = parseFloat(op.width) || 0;
+                const opSill = parseFloat(op.sillHeight) || 0;
+                const opHeight = parseFloat(op.height) || 0;
+
+                if (midX > opStart && midX < opStart + opWidth) {
+                    const opTop = opSill + opHeight;
+                    const opBottom = opSill;
                     if (nogginCenter > opBottom && nogginCenter < opTop) {
                         insideOpening = true;
                         break;
@@ -286,31 +329,28 @@ const AS1684WallGenerator = () => {
         if (showBracing) {
            const solidPanels = [];
            let currentStart = 0;
-           // Sort openings by X to identify solid zones between them
-           const allOps = [...openings].sort((a,b) => a.startX - b.startX);
+           const allOps = [...openings].sort((a,b) => (parseFloat(a.startX)||0) - (parseFloat(b.startX)||0));
            
            allOps.forEach(op => {
-               // Use a small buffer to handle stud thickness logic, but mainly prevent overlapping opening bounds
-               if (op.startX > currentStart) {
-                   solidPanels.push({ start: currentStart, end: op.startX });
+               const opStart = parseFloat(op.startX) || 0;
+               const opWidth = parseFloat(op.width) || 0;
+               if (opStart > currentStart) {
+                   solidPanels.push({ start: currentStart, end: opStart });
                }
-               // Advance current start to end of this opening
-               currentStart = Math.max(currentStart, op.startX + op.width);
+               currentStart = Math.max(currentStart, opStart + opWidth);
            });
            
-           if (currentStart < wallLength) {
-               solidPanels.push({ start: currentStart, end: wallLength });
+           if (currentStart < numWallLen) {
+               solidPanels.push({ start: currentStart, end: numWallLen });
            }
 
            solidPanels.forEach(panel => {
                const panelWidth = panel.end - panel.start;
-               // Ensure brace only generates in panels wide enough to support it (e.g. > 1200mm)
                if (panelWidth > 1200) {
-                   const padding = 150; // Increased padding to avoid clashing with jamb studs
+                   const padding = 150;
                    const braceRun = panelWidth - (padding * 2);
-                   // Ensure run is valid
                    if (braceRun > 500) {
-                      const braceRise = wallHeight - 200; 
+                      const braceRise = numWallHeight - 200; 
                       const braceLen = Math.sqrt(Math.pow(braceRun, 2) + Math.pow(braceRise, 2));
                       const angleRad = Math.atan2(braceRise, braceRun);
                       const angleDeg = angleRad * (180 / Math.PI);
@@ -328,6 +368,89 @@ const AS1684WallGenerator = () => {
     }
   }, [wallLength, wallHeight, studSize, studSpacing, openings, showBracing]);
 
+  // --- BOM & STOCK OPTIMIZATION ENGINE ---
+  const bomData = useMemo(() => {
+    if (!generateFrame) return {};
+    
+    // 1. Group raw items
+    const rawGroups = {};
+    generateFrame.forEach(item => {
+      const sizeKey = item.sectionSize || "Misc";
+      if (!rawGroups[sizeKey]) rawGroups[sizeKey] = { pieces: [], cutList: {}, totalLM: 0 };
+      
+      // Add to pieces list for bin packing
+      rawGroups[sizeKey].pieces.push(item.cutLength);
+      
+      // Add to cut list display
+      const itemKey = `${item.type} @ ${item.cutLength}mm`;
+      if (!rawGroups[sizeKey].cutList[itemKey]) {
+        rawGroups[sizeKey].cutList[itemKey] = {
+          type: item.type,
+          len: item.cutLength,
+          count: 0
+        };
+      }
+      rawGroups[sizeKey].cutList[itemKey].count++;
+      rawGroups[sizeKey].totalLM += item.cutLength;
+    });
+
+    // 2. Perform Stock Optimization (Bin Packing)
+    // For each timber size, calculate the best way to buy stock lengths
+    Object.keys(rawGroups).forEach(sizeKey => {
+      if (sizeKey === 'Metal Strap' || sizeKey === 'Misc') return; // Don't optimize metal
+
+      const pieces = [...rawGroups[sizeKey].pieces].sort((a, b) => b - a); // Sort Descending
+      const bins = []; // Each bin: { capacity: number, used: number, cuts: [] }
+
+      pieces.forEach(piece => {
+        // Simple First Fit Decreasing algorithm
+        let fitted = false;
+        
+        // Try to fit in existing open bin
+        for (let bin of bins) {
+          if (bin.remaining >= piece + 5) { // +5mm kerf allowance
+            bin.remaining -= (piece + 5);
+            bin.cuts.push(piece);
+            fitted = true;
+            break;
+          }
+        }
+
+        // If not fitted, create new bin
+        if (!fitted) {
+          // Find the smallest standard length that fits this piece
+          const bestStock = COMMON_ORDER_LENGTHS.find(l => l >= piece);
+          if (bestStock) {
+            bins.push({
+              length: bestStock,
+              remaining: bestStock - piece - 5, // Initial cut also needs kerf usually if trimmed
+              cuts: [piece]
+            });
+          } else {
+            // Piece is longer than any standard stock (e.g. huge lintel)
+            // Just order a custom long length (or largest + excess)
+            bins.push({
+              length: Math.ceil(piece / 600) * 600, // Round up to nearest 600mm
+              remaining: 0,
+              cuts: [piece]
+            });
+          }
+        }
+      });
+
+      // Consolidate bins into an order list
+      const orderSummary = {};
+      bins.forEach(bin => {
+        if (!orderSummary[bin.length]) orderSummary[bin.length] = 0;
+        orderSummary[bin.length]++;
+      });
+      
+      rawGroups[sizeKey].orderList = orderSummary;
+    });
+    
+    return rawGroups;
+  }, [generateFrame]);
+
   // --- RENDERING ENGINE ---
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -341,11 +464,15 @@ const AS1684WallGenerator = () => {
     
     if (!generateFrame || generateFrame.length === 0) return;
 
+    // Use sanitized numbers for render calculation
+    const numWallLen = parseFloat(wallLength) || 0;
+    const numWallHeight = parseFloat(wallHeight) || 0;
+
     const { d: studDepth } = TIMBER_SIZES[studSize] || TIMBER_SIZES['90x45'];
-    const cx = wallLength / 2;
-    const cy = wallHeight / 2;
+    const cx = numWallLen / 2;
+    const cy = numWallHeight / 2;
     const cz = studDepth / 2;
-    const scale = Math.min(width / (wallLength * 1.4), height / (wallHeight * 1.4)) * view3D.zoom;
+    const scale = Math.min(width / (numWallLen * 1.4), height / (numWallHeight * 1.4)) * view3D.zoom;
     
     const project = (x, y, z) => {
       let dx = x - cx;
@@ -431,7 +558,6 @@ const AS1684WallGenerator = () => {
     generateFrame.forEach((m, i) => {
       obj += `o ${m.type.replace(/\s/g, '_')}_${i}\n`;
       
-      // VERTEX GENERATION (Corrected to apply rotation)
       const rawVerts = [
         {x: 0, y: 0, z: 0}, {x: m.len, y: 0, z: 0}, {x: m.len, y: m.w, z: 0}, {x: 0, y: m.w, z: 0},
         {x: 0, y: 0, z: m.d}, {x: m.len, y: 0, z: m.d}, {x: m.len, y: m.w, z: m.d}, {x: 0, y: m.w, z: m.d}
@@ -439,9 +565,6 @@ const AS1684WallGenerator = () => {
 
       const v = rawVerts.map(v => {
           const rot = rotatePoint(v.x, v.y, m.rotation);
-          // 3D files often use Y-up, but we used Z-up for timber.
-          // Let's stick to the coordinates we used in visualization: X, Y, Z
-          // Transform local to world
           return { x: m.x + rot.x, y: m.y + rot.y, z: m.z + v.z };
       });
 
@@ -493,8 +616,8 @@ const AS1684WallGenerator = () => {
               <section className="space-y-3">
                 <h3 className="text-xs font-bold text-gray-500 uppercase">Dimensions</h3>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><label className="text-xs text-gray-400">Length</label><input type="number" value={wallLength} onChange={e => setWallLength(Number(e.target.value))} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm" /></div>
-                  <div><label className="text-xs text-gray-400">Height</label><input type="number" value={wallHeight} onChange={e => setWallHeight(Number(e.target.value))} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm" /></div>
+                  <div><label className="text-xs text-gray-400">Length</label><input type="text" value={wallLength} onChange={e => setWallLength(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm" /></div>
+                  <div><label className="text-xs text-gray-400">Height</label><input type="text" value={wallHeight} onChange={e => setWallHeight(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm" /></div>
                 </div>
               </section>
               <section className="space-y-3">
@@ -512,10 +635,10 @@ const AS1684WallGenerator = () => {
                     <div key={op.id} className="bg-gray-800 p-2 rounded border border-gray-700 text-sm space-y-2">
                       <div className="flex justify-between text-xs text-gray-400"><span>#{idx+1}</span><button onClick={() => setOpenings(openings.filter(o => o.id !== op.id))} className="text-red-400"><Trash2 className="w-3 h-3"/></button></div>
                       <div className="grid grid-cols-2 gap-2">
-                        <div><label className="text-[10px]">Start X</label><input type="number" value={op.startX} onChange={e => { const n = [...openings]; n[idx].startX = Number(e.target.value); setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
-                        <div><label className="text-[10px]">Width</label><input type="number" value={op.width} onChange={e => { const n = [...openings]; n[idx].width = Number(e.target.value); setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
-                        <div><label className="text-[10px]">Height</label><input type="number" value={op.height} onChange={e => { const n = [...openings]; n[idx].height = Number(e.target.value); setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
-                        <div><label className="text-[10px]">Sill</label><input type="number" value={op.sillHeight} onChange={e => { const n = [...openings]; n[idx].sillHeight = Number(e.target.value); setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
+                        <div><label className="text-[10px]">Start X</label><input type="text" value={op.startX} onChange={e => { const n = [...openings]; n[idx].startX = e.target.value; setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
+                        <div><label className="text-[10px]">Width</label><input type="text" value={op.width} onChange={e => { const n = [...openings]; n[idx].width = e.target.value; setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
+                        <div><label className="text-[10px]">Height</label><input type="text" value={op.height} onChange={e => { const n = [...openings]; n[idx].height = e.target.value; setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
+                        <div><label className="text-[10px]">Sill</label><input type="text" value={op.sillHeight} onChange={e => { const n = [...openings]; n[idx].sillHeight = e.target.value; setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
                       </div>
                     </div>
                   ))}
@@ -526,15 +649,55 @@ const AS1684WallGenerator = () => {
 
           {activeTab === 'bom' && (
             <div className="space-y-4">
-               <h3 className="text-xs font-bold text-gray-500 uppercase flex gap-2"><FileText className="w-4 h-4"/> Bill of Materials</h3>
-               <div className="bg-gray-800 rounded border border-gray-700 overflow-hidden text-xs">
-                 <table className="w-full text-left">
-                   <thead className="bg-gray-900 text-gray-400"><tr><th className="p-2">Item</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">LM</th></tr></thead>
-                   <tbody className="divide-y divide-gray-700">{Object.entries(generateFrame.reduce((acc, item) => { if(!acc[item.type]) acc[item.type]={c:0,l:0}; acc[item.type].c++; acc[item.type].l+=item.len; return acc; }, {})).map(([k,v])=>(<tr key={k}><td className="p-2">{k}</td><td className="p-2 text-right">{v.c}</td><td className="p-2 text-right">{(v.l/1000).toFixed(1)}m</td></tr>))}</tbody>
-                 </table>
+               <div className="flex items-center justify-between">
+                 <h3 className="text-xs font-bold text-gray-500 uppercase flex gap-2"><ShoppingCart className="w-4 h-4"/> Order List</h3>
+                 <span className="text-[10px] text-gray-500">Based on common AU lengths</span>
                </div>
-               <button onClick={handleAIComplianceCheck} disabled={isAiLoading} className="w-full bg-gray-800 p-2 rounded text-sm flex justify-center gap-2 border border-gray-700">{isAiLoading?'Checking...':<><CheckCircle className="w-4 h-4 text-green-500"/> Check Compliance</>}</button>
-               {aiAnalysis && <div className="bg-blue-900/30 p-2 rounded text-xs text-blue-200 whitespace-pre-wrap">{aiAnalysis}</div>}
+               
+               <div className="space-y-4">
+                 {Object.keys(bomData).sort().map(section => (
+                   <div key={section} className="bg-gray-800 rounded border border-gray-700 overflow-hidden text-xs">
+                     <div className="bg-gray-900 p-2 font-bold text-blue-400 flex justify-between items-center">
+                       <span>{section}</span>
+                       <span className="text-gray-500 text-[10px]">
+                         {((bomData[section].totalLM) / 1000).toFixed(1)}m Total
+                       </span>
+                     </div>
+                     
+                     {/* ORDER LIST */}
+                     {bomData[section].orderList && (
+                       <div className="bg-blue-900/20 p-2 border-b border-gray-700">
+                         <div className="font-semibold text-blue-200 mb-1 text-[10px] uppercase tracking-wider">Buy:</div>
+                         <div className="flex flex-wrap gap-2">
+                           {Object.entries(bomData[section].orderList).sort((a,b)=>b[0]-a[0]).map(([len, count]) => (
+                             <span key={len} className="bg-blue-600 text-white px-2 py-0.5 rounded text-[11px] font-mono">
+                               {count}x {len}mm
+                             </span>
+                           ))}
+                         </div>
+                       </div>
+                     )}
+
+                     {/* CUT LIST TOGGLE/DISPLAY */}
+                     <div className="p-2">
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Cutting List:</div>
+                        <div className="space-y-1">
+                          {Object.values(bomData[section].cutList).sort((a,b) => b.len - a.len).map((item, i) => (
+                            <div key={i} className="flex justify-between border-b border-gray-700/50 pb-0.5 last:border-0">
+                              <span className="text-gray-300">{item.type}</span>
+                              <span className="font-mono text-gray-400">{item.count} @ {item.len}mm</span>
+                            </div>
+                          ))}
+                        </div>
+                     </div>
+                   </div>
+                 ))}
+               </div>
+
+               <div className="pt-2 border-t border-gray-700">
+                  <button onClick={handleAIComplianceCheck} disabled={isAiLoading} className="w-full bg-gray-800 p-2 rounded text-sm flex justify-center gap-2 border border-gray-700 hover:bg-gray-700 transition">{isAiLoading?'Checking...':<><CheckCircle className="w-4 h-4 text-green-500"/> Check Compliance</>}</button>
+                  {aiAnalysis && <div className="mt-2 bg-blue-900/30 p-2 rounded text-xs text-blue-200 whitespace-pre-wrap">{aiAnalysis}</div>}
+               </div>
             </div>
           )}
 
