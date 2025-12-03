@@ -9,6 +9,11 @@ const TIMBER_SIZES = {
   '140x45': { d: 140, t: 45, grade: 'MGP12' }
 };
 
+const LINING_OPTIONS = {
+  INTERNAL: ['None', 'Plasterboard 10mm', 'Plasterboard 13mm', 'Villaboard 6mm', 'VJ Paneling'],
+  EXTERNAL: ['None', 'Weatherboard', 'Brick Veneer', 'FC Cladding', 'Rendered Foam']
+};
+
 const COMMON_ORDER_LENGTHS = [2400, 2700, 3000, 3600, 4200, 4800, 5400, 6000];
 const DEFAULT_VIEW = { rotX: 20, rotY: -40, zoom: 0.6, panX: 0, panY: 50 };
 
@@ -26,14 +31,16 @@ const adjustColor = (hex, amount) => {
     return '#' + hex.replace(/^#/, '').replace(/../g, color => ('0' + Math.min(255, Math.max(0, parseInt(color, 16) + amount)).toString(16)).substr(-2));
 };
 
-const dist = (p1, p2) => Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+const dist = (p1, p2) => {
+    if(!p1 || !p2) return Infinity;
+    return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+}
 
 // --- CORE ALGORITHM: GENERATE SINGLE WALL ---
 const generateSingleWallFrame = (wall) => {
     try {
         const { length, height, studSize, studSpacing, openings, showBracing } = wall;
         
-        // Sanitization
         const numLen = parseFloat(length) || 1000;
         const numHeight = parseFloat(height) || 2400;
         const numSpacing = parseFloat(studSpacing) || 450;
@@ -42,7 +49,7 @@ const generateSingleWallFrame = (wall) => {
         const components = [];
         const verticalMembers = []; 
 
-        const addMember = (type, x, y, z, len, w, d_dim, color, rotation = 0) => {
+        const addMember = (type, x, y, z, len, w, d_dim, color, rotation = 0, opacity = 1.0) => {
             let cutLength = 0;
             let sectionSize = "";
 
@@ -58,27 +65,39 @@ const generateSingleWallFrame = (wall) => {
             } else if (type.includes('Brace')) {
                 cutLength = len;
                 sectionSize = "Metal Strap";
+            } else if (type.includes('Lining')) {
+                cutLength = 0;
+                sectionSize = "Sheet";
             }
 
             components.push({
-                type, x, y, z, len, w, d: d_dim, color, rotation,
+                type, x, y, z, len, w, d: d_dim, color, rotation, opacity,
                 cutLength: Math.round(cutLength),
                 sectionSize
             });
         };
 
-        // --- REAL WORLD SITE COLORS ---
-        const COL_PLATE = '#5D4037'; // Dark Hardwood/Treated color
-        const COL_STUD = '#E3C08D';  // Pine Yellow
-        const COL_NOGGIN = '#DFA6A6'; // Pinkish Primer (Common in AU)
-        const COL_LINTEL = '#8D6E63'; // Laminated Beam color
-        const COL_BRACE = '#607D8B';  // Metal Grey
+        // COLORS
+        const COL_PLATE = '#5D4037'; 
+        const COL_STUD = '#E3C08D';  
+        const COL_NOGGIN = '#DFA6A6'; 
+        const COL_LINTEL = '#8D6E63'; 
+        const COL_BRACE = '#607D8B';
+        const COL_LINING_INT = '#E0E0E0';
+        const COL_LINING_EXT = '#A1887F';
 
-        // --- PLATES ---
+        // LININGS
+        if (wall.internalLining && wall.internalLining !== 'None') {
+            addMember('Int. Lining', 0, 0, -10, numLen, numHeight, 10, COL_LINING_INT, 0, 0.3);
+        }
+        if (wall.externalLining && wall.externalLining !== 'None') {
+            addMember('Ext. Lining', 0, 0, depth, numLen, numHeight, 10, COL_LINING_EXT, 0, 0.4);
+        }
+
+        // PLATES
         const plateStartX = -thickness / 2;
         const fullPlateLength = numLen + thickness;
 
-        // Bottom Plate
         let plateX = plateStartX;
         const sortedOpenings = [...openings].sort((a, b) => (parseFloat(a.startX)||0) - (parseFloat(b.startX)||0));
         const doorOpenings = sortedOpenings.filter(o => (parseFloat(o.sillHeight)||0) === 0);
@@ -100,11 +119,10 @@ const generateSingleWallFrame = (wall) => {
             }
         }
 
-        // Top Plates
         addMember('Top Plate (Lower)', plateStartX, numHeight - (thickness * 2), 0, fullPlateLength, thickness, depth, COL_PLATE);
         addMember('Top Plate (Upper)', plateStartX, numHeight - thickness, 0, fullPlateLength, thickness, depth, COL_PLATE);
 
-        // --- STUDS ---
+        // STUDS
         const gridPositions = [];
         const safeSpacing = Math.max(100, numSpacing); 
         for (let x = 0; x <= numLen; x += safeSpacing) gridPositions.push(x);
@@ -144,7 +162,7 @@ const generateSingleWallFrame = (wall) => {
             }
         });
 
-        // --- OPENINGS ---
+        // OPENINGS
         openings.forEach(op => {
             const opStart = parseFloat(op.startX) || 0;
             const opWidth = parseFloat(op.width) || 0;
@@ -165,7 +183,7 @@ const generateSingleWallFrame = (wall) => {
             if (opSill > 0) addMember('Sill Trimmer', opStart, opSill, 0, opWidth, thickness, depth, COL_PLATE);
         });
 
-        // --- NOGGINS (With Physical Gaps) ---
+        // NOGGINS
         verticalMembers.sort((a, b) => a.x - b.x);
         const uniqueVerticals = verticalMembers.filter((v, i, a) => i === 0 || Math.abs(v.x - a[i-1].x) > 1);
         const nogginCenter = numHeight / 2;
@@ -200,7 +218,7 @@ const generateSingleWallFrame = (wall) => {
             }
         }
 
-        // --- BRACING (Offset from Face) ---
+        // BRACING
         if (showBracing) {
            const solidPanels = [];
            let currentStart = 0;
@@ -241,7 +259,11 @@ const generateSingleWallFrame = (wall) => {
 const AS1684WallGenerator = () => {
   // --- MULTI-WALL STATE ---
   const [walls, setWalls] = useState([
-    { id: 1, name: 'Wall 1', length: 3000, height: 2400, studSize: '90x45', studSpacing: 450, openings: [], position: { x: 0, y: 0, rotation: 0 }, showBracing: true }
+    { 
+        id: 1, name: 'Wall 1', length: 3000, height: 2400, studSize: '90x45', studSpacing: 450, 
+        openings: [], position: { x: 0, y: 0, rotation: 0 }, showBracing: true,
+        internalLining: 'None', externalLining: 'None'
+    }
   ]);
   const [selectedWallId, setSelectedWallId] = useState(1);
   const [includeWaste, setIncludeWaste] = useState(true);
@@ -254,9 +276,9 @@ const AS1684WallGenerator = () => {
   // Drawing State
   const [drawState, setDrawState] = useState({ active: false, start: null, current: null, snapped: null });
   
-  // Modification State (Moving points)
-  const [dragHandle, setDragHandle] = useState(null); // { wallId, type: 'start'|'end' }
-  const [hoverHandle, setHoverHandle] = useState(null); // { wallId, type: 'start'|'end' }
+  // Modification State
+  const [dragHandle, setDragHandle] = useState(null); 
+  const [hoverHandle, setHoverHandle] = useState(null); 
 
   // Mouse / Canvas state
   const [isDragging, setIsDragging] = useState(false);
@@ -296,13 +318,15 @@ const AS1684WallGenerator = () => {
       studSpacing: 450, 
       openings: [], 
       position: newPos,
-      showBracing: true
+      showBracing: true,
+      internalLining: 'None',
+      externalLining: 'None'
     }]);
     setSelectedWallId(newId);
     setActiveTab('editor');
   };
 
-  // --- KEYBOARD HANDLERS (Escape) ---
+  // --- KEYBOARD HANDLERS ---
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
@@ -338,7 +362,7 @@ const AS1684WallGenerator = () => {
     const snapRadius = 25 / planView.zoom; 
 
     walls.forEach(w => {
-      if (w.id === excludeWallId) return; // Don't snap to self if modifying self
+      if (w.id === excludeWallId) return;
       const startX = w.position.x;
       const startY = w.position.y;
       const rad = w.position.rotation * (Math.PI/180);
@@ -356,41 +380,40 @@ const AS1684WallGenerator = () => {
     return { x: snapX, y: snapY, isSnapToWall };
   };
 
-  // Check for hover over endpoints
   const checkHoverHandle = (mx, my) => {
       const handleRadius = 15 / planView.zoom;
       let found = null;
-
       walls.forEach(w => {
           const p1 = w.position;
           const rad = w.position.rotation * (Math.PI/180);
           const p2 = { x: p1.x + Math.cos(rad)*w.length, y: p1.y + Math.sin(rad)*w.length };
-
           if (dist({x:mx, y:my}, p1) < handleRadius) found = { wallId: w.id, type: 'start' };
           else if (dist({x:mx, y:my}, p2) < handleRadius) found = { wallId: w.id, type: 'end' };
       });
       
-      setHoverHandle(found);
+      // Only update state if changed to prevent re-render flood
+      if (found?.wallId !== hoverHandle?.wallId || found?.type !== hoverHandle?.type) {
+          setHoverHandle(found);
+      }
       return found;
   };
 
   const handlePlanMouseDown = (e) => {
     const { x: mx, y: my } = getPlanCoordinates(e);
-
-    // 1. Check if clicking a handle to modify
-    const clickedHandle = checkHoverHandle(mx, my);
+    
+    // 1. Check Modify
+    const clickedHandle = hoverHandle; 
     if (clickedHandle && !drawState.active) {
         setDragHandle(clickedHandle);
         setSelectedWallId(clickedHandle.wallId);
         return;
     }
 
-    // 2. Drawing Logic
+    // 2. Draw
     if (activeTab === 'walls' && drawState.active) {
         const snapped = getSnappedPosition(mx, my);
         const finalX = snapped.x;
         const finalY = snapped.y;
-
         if (!drawState.start) {
             setDrawState({ ...drawState, start: { x: finalX, y: finalY }, current: { x: finalX, y: finalY }, snapped: snapped.isSnapToWall });
         } else {
@@ -399,7 +422,6 @@ const AS1684WallGenerator = () => {
             const dx = p2.x - p1.x;
             const dy = p2.y - p1.y;
             const len = Math.sqrt(dx*dx + dy*dy);
-            
             if (len > 100) {
                 const rot = Math.atan2(dy, dx) * (180/Math.PI);
                 const newId = Date.now();
@@ -412,27 +434,24 @@ const AS1684WallGenerator = () => {
                     studSpacing: 450,
                     openings: [],
                     position: { x: p1.x, y: p1.y, rotation: Math.round(rot) },
-                    showBracing: true
+                    showBracing: true,
+                    internalLining: 'None',
+                    externalLining: 'None'
                 }]);
                 setSelectedWallId(newId);
                 setDrawState({ ...drawState, start: p2, current: p2, snapped: snapped.isSnapToWall });
             }
         }
     } else {
-        // 3. Panning Logic
         setPlanDrag({ active: true, startX: e.clientX, startY: e.clientY });
     }
   };
 
   const handlePlanMouseMove = (e) => {
       const { x: mx, y: my } = getPlanCoordinates(e);
-
-      // Handle Modifying Wall (Dragging Point)
       if (dragHandle) {
           const snapped = getSnappedPosition(mx, my, dragHandle.wallId);
           const target = { x: snapped.x, y: snapped.y };
-          
-          // SHIFT KEY ORTHO CONSTRAINT
           if (e.shiftKey) {
              const w = walls.find(w => w.id === dragHandle.wallId);
              if (w) {
@@ -440,32 +459,24 @@ const AS1684WallGenerator = () => {
                  const pStart = w.position;
                  const pEnd = { x: pStart.x + Math.cos(rad)*w.length, y: pStart.y + Math.sin(rad)*w.length };
                  const refPoint = dragHandle.type === 'start' ? pEnd : pStart;
-
                  const dx = Math.abs(target.x - refPoint.x);
                  const dy = Math.abs(target.y - refPoint.y);
-
                  if (dx > dy) target.y = refPoint.y; 
                  else target.x = refPoint.x;
              }
           }
-          
           setWalls(prev => prev.map(w => {
               if (w.id !== dragHandle.wallId) return w;
-              
               let newPos = w.position;
               let newLen = w.length;
-              
               if (dragHandle.type === 'start') {
                   const rad = w.position.rotation * (Math.PI/180);
                   const pEnd = { x: w.position.x + Math.cos(rad)*w.length, y: w.position.y + Math.sin(rad)*w.length };
-                  
                   const dx = pEnd.x - target.x;
                   const dy = pEnd.y - target.y;
                   newLen = Math.sqrt(dx*dx + dy*dy);
                   const newRot = Math.atan2(dy, dx) * (180/Math.PI);
-                  
                   newPos = { x: target.x, y: target.y, rotation: Math.round(newRot) };
-                  
               } else {
                   const dx = target.x - w.position.x;
                   const dy = target.y - w.position.y;
@@ -477,14 +488,10 @@ const AS1684WallGenerator = () => {
           }));
           return;
       }
-
-      // Drawing Tool
       if (activeTab === 'walls' && drawState.active) {
         const snapped = getSnappedPosition(mx, my);
         let targetX = snapped.x;
         let targetY = snapped.y;
-
-        // Draw State Ortho
         if (drawState.start) {
             if (e.shiftKey) {
                 const dx = Math.abs(targetX - drawState.start.x);
@@ -497,16 +504,12 @@ const AS1684WallGenerator = () => {
             }
         }
         setDrawState(prev => ({ ...prev, current: { x: targetX, y: targetY }, snapped: snapped.isSnapToWall }));
-      } 
-      // Panning
-      else if (planDrag.active) {
+      } else if (planDrag.active) {
           const dx = e.clientX - planDrag.startX;
           const dy = e.clientY - planDrag.startY;
           setPlanView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
           setPlanDrag({ ...planDrag, startX: e.clientX, startY: e.clientY });
-      }
-      // Hover Check
-      else {
+      } else {
           checkHoverHandle(mx, my);
       }
   };
@@ -543,7 +546,12 @@ const AS1684WallGenerator = () => {
   // --- BOM ENGINE ---
   const globalBOM = useMemo(() => {
     const rawGroups = {};
+    const liningGroups = {};
+
+    // 1. Structural BOM
     houseGeometry.forEach(item => {
+      if (item.type.includes('Lining')) return;
+
       const sizeKey = item.sectionSize || "Misc";
       if (!rawGroups[sizeKey]) rawGroups[sizeKey] = { pieces: [], cutList: {}, totalLM: 0 };
       rawGroups[sizeKey].pieces.push(item.cutLength);
@@ -554,6 +562,25 @@ const AS1684WallGenerator = () => {
       rawGroups[sizeKey].cutList[itemKey].count++;
       rawGroups[sizeKey].totalLM += item.cutLength;
     });
+
+    // 2. Lining BOM
+    walls.forEach(w => {
+        let area = (w.length * w.height) / 1000000; 
+        w.openings.forEach(op => {
+            area -= (op.width * op.height) / 1000000;
+        });
+        if (w.internalLining && w.internalLining !== 'None') {
+            const key = w.internalLining;
+            if (!liningGroups[key]) liningGroups[key] = 0;
+            liningGroups[key] += area;
+        }
+        if (w.externalLining && w.externalLining !== 'None') {
+            const key = w.externalLining;
+            if (!liningGroups[key]) liningGroups[key] = 0;
+            liningGroups[key] += area;
+        }
+    });
+
     Object.keys(rawGroups).forEach(sizeKey => {
       if (sizeKey === 'Metal Strap' || sizeKey === 'Misc') return;
       const pieces = [...rawGroups[sizeKey].pieces].sort((a, b) => b - a);
@@ -584,8 +611,8 @@ const AS1684WallGenerator = () => {
       });
       rawGroups[sizeKey].orderList = orderSummary;
     });
-    return rawGroups;
-  }, [houseGeometry]);
+    return { structural: rawGroups, linings: liningGroups };
+  }, [houseGeometry, walls]);
 
   // --- RENDER 3D LOOP ---
   useEffect(() => {
@@ -636,7 +663,7 @@ const AS1684WallGenerator = () => {
     let allFaces = [];
 
     houseGeometry.forEach(comp => {
-      const { x, y, z, len, w, d, color, rotation, worldTransform, wallId } = comp;
+      const { x, y, z, len, w, d, color, rotation, worldTransform, wallId, opacity } = comp;
       const isSelected = wallId === selectedWallId;
       const baseColor = isSelected ? color : adjustColor(color, -60); 
 
@@ -671,7 +698,7 @@ const AS1684WallGenerator = () => {
 
       faces.forEach(face => {
         const minZ = Math.min(p[face.v[0]].z, p[face.v[1]].z, p[face.v[2]].z, p[face.v[3]].z);
-        allFaces.push({ pts: face.v.map(i => p[i]), z: minZ, color: face.c });
+        allFaces.push({ pts: face.v.map(i => p[i]), z: minZ, color: face.c, opacity: opacity || 1.0 });
       });
     });
 
@@ -684,11 +711,15 @@ const AS1684WallGenerator = () => {
       ctx.lineTo(f.pts[2].x, f.pts[2].y);
       ctx.lineTo(f.pts[3].x, f.pts[3].y);
       ctx.closePath();
+      
+      ctx.globalAlpha = f.opacity;
       ctx.fillStyle = f.color;
       ctx.fill();
+      
       ctx.strokeStyle = '#00000099';
       ctx.lineWidth = 0.8;
       ctx.stroke();
+      ctx.globalAlpha = 1.0;
     });
 
   }, [houseGeometry, view3D, selectedWallId, projectionMode, viewMode]);
@@ -756,13 +787,16 @@ const AS1684WallGenerator = () => {
           ctx.beginPath(); ctx.arc(endX, endY, handleSize, 0, Math.PI*2); ctx.fill();
       });
 
-      // Draw Drawing Preview
+      // Draw Active Temp Wall
       if (drawState.active) {
           const cursorPos = drawState.current || { x: 0, y: 0 };
-          const sx = cx + (cursorPos.x * planView.zoom);
-          const sy = cy + (cursorPos.y * planView.zoom);
+          const sx = cx + (cursorPos.x * planView.zoom); // Snap target X screen
+          const sy = cy + (cursorPos.y * planView.zoom); // Snap target Y screen
 
-          ctx.strokeStyle = '#3b82f6';
+          // --- VISUAL FEEDBACK: CURSOR & SNAP TARGET ---
+          
+          // 1. Draw Raw Input Cursor (Blue Crosshair) to show where mouse actually is
+          ctx.strokeStyle = '#3b82f6'; // Blue
           ctx.lineWidth = 1;
           const crossSize = 10;
           ctx.beginPath();
@@ -770,10 +804,14 @@ const AS1684WallGenerator = () => {
           ctx.moveTo(sx, sy - crossSize); ctx.lineTo(sx, sy + crossSize);
           ctx.stroke();
 
+          // 2. Draw Snap Target (Red Circle) ONLY if actually snapped
           if (drawState.snapped) {
-              ctx.strokeStyle = '#ef4444';
+              ctx.strokeStyle = '#ef4444'; // Red
               ctx.lineWidth = 2;
-              ctx.beginPath(); ctx.arc(sx, sy, 8, 0, Math.PI*2); ctx.stroke();
+              ctx.beginPath(); 
+              ctx.arc(sx, sy, 8, 0, Math.PI*2); 
+              ctx.stroke();
+              
               ctx.fillStyle = '#ef4444';
               ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI*2); ctx.fill();
           }
@@ -782,15 +820,16 @@ const AS1684WallGenerator = () => {
               const startScreenX = cx + (drawState.start.x * planView.zoom);
               const startScreenY = cy + (drawState.start.y * planView.zoom);
               
-              ctx.strokeStyle = '#22c55e';
-              ctx.lineWidth = 90 * planView.zoom;
-              ctx.globalAlpha = 0.5;
+              ctx.strokeStyle = '#22c55e'; // Green drag line
+              ctx.lineWidth = 90 * planView.zoom; // Show actual thickness preview
+              ctx.globalAlpha = 0.5; // Transparent preview
               ctx.beginPath();
               ctx.moveTo(startScreenX, startScreenY);
               ctx.lineTo(sx, sy);
               ctx.stroke();
               ctx.globalAlpha = 1.0;
               
+              // Center line
               ctx.strokeStyle = '#fff';
               ctx.lineWidth = 2;
               ctx.beginPath();
@@ -798,6 +837,7 @@ const AS1684WallGenerator = () => {
               ctx.lineTo(sx, sy);
               ctx.stroke();
               
+              // Length Label
               const d = dist(drawState.start, cursorPos);
               ctx.fillStyle = '#fff';
               ctx.font = '12px monospace';
@@ -924,6 +964,25 @@ const AS1684WallGenerator = () => {
                 </div>
               </section>
 
+              {/* NEW LININGS SECTION */}
+              <section className="space-y-3 pt-2 border-t border-gray-800">
+                <h3 className="text-xs font-bold text-gray-500 uppercase">Linings</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-gray-400">Internal</label>
+                    <select value={activeWall.internalLining} onChange={e => updateActiveWall('internalLining', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-gray-200">
+                      {LINING_OPTIONS.INTERNAL.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-400">External</label>
+                    <select value={activeWall.externalLining} onChange={e => updateActiveWall('externalLining', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-gray-200">
+                      {LINING_OPTIONS.EXTERNAL.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </section>
+
               <section className="space-y-3">
                 <div className="flex justify-between"><h3 className="text-xs font-bold text-gray-500 uppercase">Openings</h3><button onClick={() => updateActiveWall('openings', [...activeWall.openings, { id: Date.now(), startX: 500, width: 900, height: 2100, sillHeight: 0 }])} className="text-blue-400"><Plus className="w-4 h-4"/></button></div>
                 <div className="space-y-2">
@@ -950,19 +1009,21 @@ const AS1684WallGenerator = () => {
                  <h3 className="text-xs font-bold text-gray-500 uppercase flex gap-2"><ShoppingCart className="w-4 h-4"/> Global Order</h3>
                </div>
                
+               {/* STRUCTURAL */}
                <div className="space-y-4">
-                 {Object.keys(globalBOM).sort().map(section => (
+                 <div className="text-xs text-blue-400 font-bold uppercase tracking-wider">Framing Timber</div>
+                 {Object.keys(globalBOM.structural).sort().map(section => (
                    <div key={section} className="bg-gray-800 rounded border border-gray-700 overflow-hidden text-xs">
                      <div className="bg-gray-900 p-2 font-bold text-blue-400 flex justify-between items-center">
                        <span>{section}</span>
                        <span className="text-gray-500 text-[10px]">
-                         {((globalBOM[section].totalLM) / 1000).toFixed(1)}m Total
+                         {((globalBOM.structural[section].totalLM) / 1000).toFixed(1)}m Total
                        </span>
                      </div>
-                     {globalBOM[section].orderList && (
+                     {globalBOM.structural[section].orderList && (
                        <div className="bg-blue-900/20 p-2 border-b border-gray-700">
                          <div className="flex flex-wrap gap-2">
-                           {Object.entries(globalBOM[section].orderList).sort((a,b)=>b[0]-a[0]).map(([len, count]) => (
+                           {Object.entries(globalBOM.structural[section].orderList).sort((a,b)=>b[0]-a[0]).map(([len, count]) => (
                              <span key={len} className="bg-blue-600 text-white px-2 py-0.5 rounded text-[11px] font-mono">
                                {count}x {len}mm
                              </span>
@@ -973,6 +1034,19 @@ const AS1684WallGenerator = () => {
                    </div>
                  ))}
                </div>
+
+               {/* LININGS */}
+               <div className="space-y-4 pt-2 border-t border-gray-700">
+                 <div className="text-xs text-green-400 font-bold uppercase tracking-wider">Wall Linings</div>
+                 {Object.keys(globalBOM.linings).length === 0 ? <div className="text-gray-500 text-xs italic">No linings selected</div> : 
+                   Object.entries(globalBOM.linings).map(([type, area]) => (
+                     <div key={type} className="flex justify-between bg-gray-800 p-2 rounded border border-gray-700 text-xs">
+                        <span className="text-gray-300">{type}</span>
+                        <span className="font-mono text-white font-bold">{area.toFixed(1)} m²</span>
+                     </div>
+                   ))
+                 }
+               </div>
             </div>
           )}
 
@@ -982,7 +1056,6 @@ const AS1684WallGenerator = () => {
       {/* CANVAS AREA */}
       <div className="flex-1 relative bg-[#12141a]">
         <div className="absolute top-4 right-4 flex gap-2 z-10">
-           
            {/* VIEW TABS */}
            <div className="bg-gray-900 rounded p-1 flex gap-1 border border-gray-700">
               <button onClick={() => setViewMode('plan')} className={`px-3 py-1 rounded text-xs font-bold ${viewMode==='plan'?'bg-blue-600 text-white':'text-gray-400 hover:text-white'}`}>2D Plan</button>
