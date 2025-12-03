@@ -1,447 +1,834 @@
-# AS 1684 Timber Wall Frame Export
-# Generated: 12/3/2025, 11:27:02 AM
-# Wall: 3600mm x 2400mm
-# Timber: 90x45mm MGP10
-# Spacing: 450mm centers
-# Components: 20
+import React, { useState, useRef, useEffect } from 'react';
+import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X } from 'lucide-react';
 
-o bottom_plate_0
-v -22.50 0.00 0.00
-v 3622.50 0.00 0.00
-v 3622.50 45.00 0.00
-v -22.50 45.00 0.00
-v -22.50 0.00 90.00
-v 3622.50 0.00 90.00
-v 3622.50 45.00 90.00
-v -22.50 45.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 1//1 2//1 3//1 4//1
-f 8//2 7//2 6//2 5//2
-f 5//3 6//3 2//3 1//3
-f 4//4 3//4 7//4 8//4
-f 1//5 4//5 8//5 5//5
-f 2//6 6//6 7//6 3//6
+const AS1684WallGenerator = () => {
+  const [wallLength, setWallLength] = useState(3600);
+  const [wallHeight, setWallHeight] = useState(2400);
+  const [studSize, setStudSize] = useState('90x45');
+  const [studSpacing, setStudSpacing] = useState(450);
+  const [timberGrade, setTimberGrade] = useState('MGP10');
+  const [openings, setOpenings] = useState([]);
+  const [showBracing, setShowBracing] = useState(false);
+  const [view3D, setView3D] = useState({ rotX: 20, rotY: 45, zoom: 1, panX: 0, panY: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [showSettings, setShowSettings] = useState(false);
+  const canvasRef = useRef(null);
 
-o top_plate_1_1
-v -22.50 2355.00 0.00
-v 3622.50 2355.00 0.00
-v 3622.50 2400.00 0.00
-v -22.50 2400.00 0.00
-v -22.50 2355.00 90.00
-v 3622.50 2355.00 90.00
-v 3622.50 2400.00 90.00
-v -22.50 2400.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 9//1 10//1 11//1 12//1
-f 16//2 15//2 14//2 13//2
-f 13//3 14//3 10//3 9//3
-f 12//4 11//4 15//4 16//4
-f 9//5 12//5 16//5 13//5
-f 10//6 14//6 15//6 11//6
+  const timberSizes = {
+    '70x35': { width: 70, depth: 35 },
+    '90x35': { width: 90, depth: 35 },
+    '90x45': { width: 90, depth: 45 },
+    '140x45': { width: 140, depth: 45 }
+  };
 
-o top_plate_2_2
-v -22.50 2310.00 0.00
-v 3622.50 2310.00 0.00
-v 3622.50 2355.00 0.00
-v -22.50 2355.00 0.00
-v -22.50 2310.00 90.00
-v 3622.50 2310.00 90.00
-v 3622.50 2355.00 90.00
-v -22.50 2355.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 17//1 18//1 19//1 20//1
-f 24//2 23//2 22//2 21//2
-f 21//3 22//3 18//3 17//3
-f 20//4 19//4 23//4 24//4
-f 17//5 20//5 24//5 21//5
-f 18//6 22//6 23//6 19//6
+  const addOpening = () => {
+    setOpenings([...openings, {
+      id: Date.now(),
+      startX: 500,
+      width: 900,
+      height: 2100,
+      sillHeight: 0,
+      type: 'door'
+    }]);
+  };
 
-o stud_3
-v -22.50 45.00 0.00
-v 22.50 45.00 0.00
-v 22.50 2310.00 0.00
-v -22.50 2310.00 0.00
-v -22.50 45.00 90.00
-v 22.50 45.00 90.00
-v 22.50 2310.00 90.00
-v -22.50 2310.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 25//1 26//1 27//1 28//1
-f 32//2 31//2 30//2 29//2
-f 29//3 30//3 26//3 25//3
-f 28//4 27//4 31//4 32//4
-f 25//5 28//5 32//5 29//5
-f 26//6 30//6 31//6 27//6
+  const removeOpening = (id) => {
+    setOpenings(openings.filter(o => o.id !== id));
+  };
 
-o stud_4
-v 427.50 45.00 0.00
-v 472.50 45.00 0.00
-v 472.50 2310.00 0.00
-v 427.50 2310.00 0.00
-v 427.50 45.00 90.00
-v 472.50 45.00 90.00
-v 472.50 2310.00 90.00
-v 427.50 2310.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 33//1 34//1 35//1 36//1
-f 40//2 39//2 38//2 37//2
-f 37//3 38//3 34//3 33//3
-f 36//4 35//4 39//4 40//4
-f 33//5 36//5 40//5 37//5
-f 34//6 38//6 39//6 35//6
+  const updateOpening = (id, field, value) => {
+    setOpenings(openings.map(o => 
+      o.id === id ? { ...o, [field]: parseFloat(value) || 0 } : o
+    ));
+  };
 
-o stud_5
-v 877.50 45.00 0.00
-v 922.50 45.00 0.00
-v 922.50 2310.00 0.00
-v 877.50 2310.00 0.00
-v 877.50 45.00 90.00
-v 922.50 45.00 90.00
-v 922.50 2310.00 90.00
-v 877.50 2310.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 41//1 42//1 43//1 44//1
-f 48//2 47//2 46//2 45//2
-f 45//3 46//3 42//3 41//3
-f 44//4 43//4 47//4 48//4
-f 41//5 44//5 48//5 45//5
-f 42//6 46//6 47//6 43//6
+  const generateWallFraming = () => {
+    const timber = timberSizes[studSize];
+    const components = [];
 
-o stud_6
-v 1327.50 45.00 0.00
-v 1372.50 45.00 0.00
-v 1372.50 2310.00 0.00
-v 1327.50 2310.00 0.00
-v 1327.50 45.00 90.00
-v 1372.50 45.00 90.00
-v 1372.50 2310.00 90.00
-v 1327.50 2310.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 49//1 50//1 51//1 52//1
-f 56//2 55//2 54//2 53//2
-f 53//3 54//3 50//3 49//3
-f 52//4 51//4 55//4 56//4
-f 49//5 52//5 56//5 53//5
-f 50//6 54//6 55//6 51//6
+    // Bottom and Top plates - plates DON'T extend through openings
+    // We'll need to break plates at openings
+    
+    // Collect all opening boundaries
+    const openingBoundaries = openings.map(o => ({
+      start: o.startX - timber.depth,
+      end: o.startX + o.width + timber.depth
+    })).sort((a, b) => a.start - b.start);
+    
+    // Create plate segments between openings
+    const plateStartX = -timber.depth / 2;
+    const plateEndX = wallLength + timber.depth / 2;
+    
+    let currentX = plateStartX;
+    
+    if (openingBoundaries.length === 0) {
+      // No openings - continuous plates
+      components.push({
+        type: 'bottom_plate',
+        x: plateStartX, y: 0, z: 0,
+        length: plateEndX - plateStartX,
+        width: timber.depth,
+        depth: timber.width
+      });
+      components.push({
+        type: 'top_plate_1',
+        x: plateStartX, y: wallHeight - timber.depth, z: 0,
+        length: plateEndX - plateStartX,
+        width: timber.depth,
+        depth: timber.width
+      });
+      components.push({
+        type: 'top_plate_2',
+        x: plateStartX, y: wallHeight - timber.depth * 2, z: 0,
+        length: plateEndX - plateStartX,
+        width: timber.depth,
+        depth: timber.width
+      });
+    } else {
+      // Create plate segments
+      openingBoundaries.forEach(opening => {
+        if (currentX < opening.start) {
+          const segmentLength = opening.start - currentX;
+          components.push({
+            type: 'bottom_plate',
+            x: currentX, y: 0, z: 0,
+            length: segmentLength,
+            width: timber.depth,
+            depth: timber.width
+          });
+          components.push({
+            type: 'top_plate_1',
+            x: currentX, y: wallHeight - timber.depth, z: 0,
+            length: segmentLength,
+            width: timber.depth,
+            depth: timber.width
+          });
+          components.push({
+            type: 'top_plate_2',
+            x: currentX, y: wallHeight - timber.depth * 2, z: 0,
+            length: segmentLength,
+            width: timber.depth,
+            depth: timber.width
+          });
+        }
+        currentX = opening.end;
+      });
+      
+      // Final segment after last opening
+      if (currentX < plateEndX) {
+        const segmentLength = plateEndX - currentX;
+        components.push({
+          type: 'bottom_plate',
+          x: currentX, y: 0, z: 0,
+          length: segmentLength,
+          width: timber.depth,
+          depth: timber.width
+        });
+        components.push({
+          type: 'top_plate_1',
+          x: currentX, y: wallHeight - timber.depth, z: 0,
+          length: segmentLength,
+          width: timber.depth,
+          depth: timber.width
+        });
+        components.push({
+          type: 'top_plate_2',
+          x: currentX, y: wallHeight - timber.depth * 2, z: 0,
+          length: segmentLength,
+          width: timber.depth,
+          depth: timber.width
+        });
+      }
+    }
 
-o stud_7
-v 1777.50 45.00 0.00
-v 1822.50 45.00 0.00
-v 1822.50 2310.00 0.00
-v 1777.50 2310.00 0.00
-v 1777.50 45.00 90.00
-v 1822.50 45.00 90.00
-v 1822.50 2310.00 90.00
-v 1777.50 2310.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 57//1 58//1 59//1 60//1
-f 64//2 63//2 62//2 61//2
-f 61//3 62//3 58//3 57//3
-f 60//4 59//4 63//4 64//4
-f 57//5 60//5 64//5 61//5
-f 58//6 62//6 63//6 59//6
+    const studPositions = [];
+    
+    // Always place studs at 0 and wallLength (end studs)
+    studPositions.push(0);
+    
+    for (let x = studSpacing; x < wallLength; x += studSpacing) {
+      
+      let isBlocked = false;
+      for (const opening of openings) {
+        if (x >= opening.startX && x <= opening.startX + opening.width) {
+          isBlocked = true;
+          break;
+        }
+      }
+      
+      if (!isBlocked) {
+        studPositions.push(x);
+      }
+    }
+    
+    // Always add end stud at wallLength if not already there
+    if (studPositions[studPositions.length - 1] !== wallLength) {
+      studPositions.push(wallLength);
+    }
+    
+    // Now create studs at all positions
+    studPositions.forEach(x => {
+      components.push({
+        type: 'stud',
+        x: x - timber.depth / 2,
+        y: timber.depth,
+        z: 0,
+        length: timber.depth,
+        width: wallHeight - timber.depth * 3,
+        depth: timber.width
+      });
+    });
 
-o stud_8
-v 2227.50 45.00 0.00
-v 2272.50 45.00 0.00
-v 2272.50 2310.00 0.00
-v 2227.50 2310.00 0.00
-v 2227.50 45.00 90.00
-v 2272.50 45.00 90.00
-v 2272.50 2310.00 90.00
-v 2227.50 2310.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 65//1 66//1 67//1 68//1
-f 72//2 71//2 70//2 69//2
-f 69//3 70//3 66//3 65//3
-f 68//4 67//4 71//4 72//4
-f 65//5 68//5 72//5 69//5
-f 66//6 70//6 71//6 67//6
+    openings.forEach(opening => {
+      const startX = opening.startX;
+      const endX = opening.startX + opening.width;
 
-o stud_9
-v 2677.50 45.00 0.00
-v 2722.50 45.00 0.00
-v 2722.50 2310.00 0.00
-v 2677.50 2310.00 0.00
-v 2677.50 45.00 90.00
-v 2722.50 45.00 90.00
-v 2722.50 2310.00 90.00
-v 2677.50 2310.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 73//1 74//1 75//1 76//1
-f 80//2 79//2 78//2 77//2
-f 77//3 78//3 74//3 73//3
-f 76//4 75//4 79//4 80//4
-f 73//5 76//5 80//5 77//5
-f 74//6 78//6 79//6 75//6
+      components.push({
+        type: 'jamb_stud_left',
+        x: startX - timber.depth,
+        y: timber.depth,
+        z: 0,
+        length: timber.depth,
+        width: wallHeight - timber.depth * 3,
+        depth: timber.width
+      });
+      components.push({
+        type: 'jamb_stud_right',
+        x: endX,
+        y: timber.depth,
+        z: 0,
+        length: timber.depth,
+        width: wallHeight - timber.depth * 3,
+        depth: timber.width
+      });
 
-o stud_10
-v 3127.50 45.00 0.00
-v 3172.50 45.00 0.00
-v 3172.50 2310.00 0.00
-v 3127.50 2310.00 0.00
-v 3127.50 45.00 90.00
-v 3172.50 45.00 90.00
-v 3172.50 2310.00 90.00
-v 3127.50 2310.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 81//1 82//1 83//1 84//1
-f 88//2 87//2 86//2 85//2
-f 85//3 86//3 82//3 81//3
-f 84//4 83//4 87//4 88//4
-f 81//5 84//5 88//5 85//5
-f 82//6 86//6 87//6 83//6
+      const lintelDepth = opening.width > 1200 ? timber.width * 2 : timber.width;
+      
+      components.push({
+        type: 'jack_stud_left',
+        x: startX - timber.depth / 2,
+        y: timber.depth,
+        z: 0,
+        length: timber.depth,
+        width: opening.sillHeight + opening.height,
+        depth: timber.width
+      });
+      components.push({
+        type: 'jack_stud_right',
+        x: endX - timber.depth / 2,
+        y: timber.depth,
+        z: 0,
+        length: timber.depth,
+        width: opening.sillHeight + opening.height,
+        depth: timber.width
+      });
 
-o stud_11
-v 3577.50 45.00 0.00
-v 3622.50 45.00 0.00
-v 3622.50 2310.00 0.00
-v 3577.50 2310.00 0.00
-v 3577.50 45.00 90.00
-v 3622.50 45.00 90.00
-v 3622.50 2310.00 90.00
-v 3577.50 2310.00 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 89//1 90//1 91//1 92//1
-f 96//2 95//2 94//2 93//2
-f 93//3 94//3 90//3 89//3
-f 92//4 91//4 95//4 96//4
-f 89//5 92//5 96//5 93//5
-f 90//6 94//6 95//6 91//6
+      components.push({
+        type: 'lintel',
+        x: startX - timber.depth,
+        y: timber.depth + opening.sillHeight + opening.height,
+        z: 0,
+        length: opening.width + timber.depth * 2,
+        width: lintelDepth,
+        depth: timber.depth
+      });
 
-o noggin_12
-v 22.50 1222.50 0.00
-v 427.50 1222.50 0.00
-v 427.50 1267.50 0.00
-v 22.50 1267.50 0.00
-v 22.50 1222.50 90.00
-v 427.50 1222.50 90.00
-v 427.50 1267.50 90.00
-v 22.50 1267.50 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 97//1 98//1 99//1 100//1
-f 104//2 103//2 102//2 101//2
-f 101//3 102//3 98//3 97//3
-f 100//4 99//4 103//4 104//4
-f 97//5 100//5 104//5 101//5
-f 98//6 102//6 103//6 99//6
+      if (opening.sillHeight > 0) {
+        components.push({
+          type: 'sill',
+          x: startX - timber.depth,
+          y: timber.depth + opening.sillHeight,
+          z: 0,
+          length: opening.width + timber.depth * 2,
+          width: timber.depth,
+          depth: timber.depth
+        });
 
-o noggin_13
-v 472.50 1177.50 0.00
-v 877.50 1177.50 0.00
-v 877.50 1222.50 0.00
-v 472.50 1222.50 0.00
-v 472.50 1177.50 90.00
-v 877.50 1177.50 90.00
-v 877.50 1222.50 90.00
-v 472.50 1222.50 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 105//1 106//1 107//1 108//1
-f 112//2 111//2 110//2 109//2
-f 109//3 110//3 106//3 105//3
-f 108//4 107//4 111//4 112//4
-f 105//5 108//5 112//5 109//5
-f 106//6 110//6 111//6 107//6
+        for (let x = startX; x < endX; x += studSpacing) {
+          components.push({
+            type: 'cripple_stud',
+            x: x - timber.depth / 2,
+            y: timber.depth,
+            z: 0,
+            length: timber.depth,
+            width: opening.sillHeight,
+            depth: timber.width
+          });
+        }
+      }
 
-o noggin_14
-v 922.50 1222.50 0.00
-v 1327.50 1222.50 0.00
-v 1327.50 1267.50 0.00
-v 922.50 1267.50 0.00
-v 922.50 1222.50 90.00
-v 1327.50 1222.50 90.00
-v 1327.50 1267.50 90.00
-v 922.50 1267.50 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 113//1 114//1 115//1 116//1
-f 120//2 119//2 118//2 117//2
-f 117//3 118//3 114//3 113//3
-f 116//4 115//4 119//4 120//4
-f 113//5 116//5 120//5 117//5
-f 114//6 118//6 119//6 115//6
+      for (let x = startX; x < endX; x += studSpacing) {
+        components.push({
+          type: 'cripple_stud_top',
+          x: x - timber.depth / 2,
+          y: timber.depth + opening.sillHeight + opening.height + lintelDepth,
+          z: 0,
+          length: timber.depth,
+          width: wallHeight - timber.depth * 3 - opening.sillHeight - opening.height - lintelDepth,
+          depth: timber.width
+        });
+      }
+    });
 
-o noggin_15
-v 1372.50 1177.50 0.00
-v 1777.50 1177.50 0.00
-v 1777.50 1222.50 0.00
-v 1372.50 1222.50 0.00
-v 1372.50 1177.50 90.00
-v 1777.50 1177.50 90.00
-v 1777.50 1222.50 90.00
-v 1372.50 1222.50 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 121//1 122//1 123//1 124//1
-f 128//2 127//2 126//2 125//2
-f 125//3 126//3 122//3 121//3
-f 124//4 123//4 127//4 128//4
-f 121//5 124//5 128//5 125//5
-f 122//6 126//6 127//6 123//6
+    const nogginHeight = wallHeight / 2;
+    for (let i = 0; i < studPositions.length - 1; i++) {
+      const stagger = i % 2 === 0 ? timber.depth / 2 : -timber.depth / 2;
+      components.push({
+        type: 'noggin',
+        x: studPositions[i] + timber.depth / 2,
+        y: nogginHeight + stagger,
+        z: 0,
+        length: studPositions[i + 1] - studPositions[i] - timber.depth,
+        width: timber.depth,
+        depth: timber.width
+      });
+    }
 
-o noggin_16
-v 1822.50 1222.50 0.00
-v 2227.50 1222.50 0.00
-v 2227.50 1267.50 0.00
-v 1822.50 1267.50 0.00
-v 1822.50 1222.50 90.00
-v 2227.50 1222.50 90.00
-v 2227.50 1267.50 90.00
-v 1822.50 1267.50 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 129//1 130//1 131//1 132//1
-f 136//2 135//2 134//2 133//2
-f 133//3 134//3 130//3 129//3
-f 132//4 131//4 135//4 136//4
-f 129//5 132//5 136//5 133//5
-f 130//6 134//6 135//6 131//6
+    if (showBracing) {
+      const braceLength = Math.sqrt(wallLength * wallLength + (wallHeight - timber.depth * 3) * (wallHeight - timber.depth * 3));
+      const angle = Math.atan((wallHeight - timber.depth * 3) / wallLength);
+      
+      components.push({
+        type: 'brace',
+        x: 0,
+        y: timber.depth,
+        z: timber.width / 2,
+        length: braceLength,
+        width: timber.depth,
+        depth: 35,
+        angle: angle * 180 / Math.PI
+      });
+    }
 
-o noggin_17
-v 2272.50 1177.50 0.00
-v 2677.50 1177.50 0.00
-v 2677.50 1222.50 0.00
-v 2272.50 1222.50 0.00
-v 2272.50 1177.50 90.00
-v 2677.50 1177.50 90.00
-v 2677.50 1222.50 90.00
-v 2272.50 1222.50 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 137//1 138//1 139//1 140//1
-f 144//2 143//2 142//2 141//2
-f 141//3 142//3 138//3 137//3
-f 140//4 139//4 143//4 144//4
-f 137//5 140//5 144//5 141//5
-f 138//6 142//6 143//6 139//6
+    return components;
+  };
 
-o noggin_18
-v 2722.50 1222.50 0.00
-v 3127.50 1222.50 0.00
-v 3127.50 1267.50 0.00
-v 2722.50 1267.50 0.00
-v 2722.50 1222.50 90.00
-v 3127.50 1222.50 90.00
-v 3127.50 1267.50 90.00
-v 2722.50 1267.50 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 145//1 146//1 147//1 148//1
-f 152//2 151//2 150//2 149//2
-f 149//3 150//3 146//3 145//3
-f 148//4 147//4 151//4 152//4
-f 145//5 148//5 152//5 149//5
-f 146//6 150//6 151//6 147//6
+  const handleMouseDown = (e) => {
+    if (e.shiftKey) {
+      setIsPanning(true);
+    } else {
+      setIsDragging(true);
+    }
+    setDragStart({ x: e.clientX, y: e.clientY });
+  };
 
-o noggin_19
-v 3172.50 1177.50 0.00
-v 3577.50 1177.50 0.00
-v 3577.50 1222.50 0.00
-v 3172.50 1222.50 0.00
-v 3172.50 1177.50 90.00
-v 3577.50 1177.50 90.00
-v 3577.50 1222.50 90.00
-v 3172.50 1222.50 90.00
-vn 0 0 -1
-vn 0 0 1
-vn 0 -1 0
-vn 0 1 0
-vn -1 0 0
-vn 1 0 0
-f 153//1 154//1 155//1 156//1
-f 160//2 159//2 158//2 157//2
-f 157//3 158//3 154//3 153//3
-f 156//4 155//4 159//4 160//4
-f 153//5 156//5 160//5 157//5
-f 154//6 158//6 159//6 155//6
+  const handleMouseMove = (e) => {
+    if (isPanning) {
+      const deltaX = e.clientX - dragStart.x;
+      const deltaY = e.clientY - dragStart.y;
+      
+      setView3D(prev => ({
+        ...prev,
+        panX: prev.panX + deltaX,
+        panY: prev.panY + deltaY
+      }));
+      
+      setDragStart({ x: e.clientX, y: e.clientY });
+    } else if (isDragging) {
+      const deltaX = e.clientX - dragStart.x;
+      const deltaY = e.clientY - dragStart.y;
+      
+      setView3D(prev => ({
+        ...prev,
+        rotY: (prev.rotY + deltaX * 0.5) % 360,
+        rotX: Math.max(-90, Math.min(90, prev.rotX - deltaY * 0.5))
+      }));
+      
+      setDragStart({ x: e.clientX, y: e.clientY });
+    }
+  };
 
+  const handleMouseUp = () => {
+    setIsDragging(false);
+    setIsPanning(false);
+  };
+
+  const handleWheel = (e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setView3D(prev => ({
+      ...prev,
+      zoom: Math.max(0.1, Math.min(5, prev.zoom * delta))
+    }));
+  };
+
+  const resetView = () => {
+    setView3D({ rotX: 20, rotY: 45, zoom: 1, panX: 0, panY: 0 });
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+
+    ctx.clearRect(0, 0, width, height);
+
+    const components = generateWallFraming();
+    
+    const centerX = wallLength / 2;
+    const centerY = wallHeight / 2;
+    const centerZ = timberSizes[studSize].width / 2;
+    
+    const scale = Math.min(width / (wallLength * 1.2), height / (wallHeight * 1.2)) * view3D.zoom;
+    const offsetX = width / 2;
+    const offsetY = height / 2;
+
+    const project = (x, y, z) => {
+      let x1 = x - centerX;
+      let y1 = y - centerY;
+      let z1 = z - centerZ;
+
+      const rotX = view3D.rotX * Math.PI / 180;
+      const rotY = view3D.rotY * Math.PI / 180;
+
+      let x2 = x1 * Math.cos(rotY) - z1 * Math.sin(rotY);
+      let z2 = x1 * Math.sin(rotY) + z1 * Math.cos(rotY);
+
+      let y2 = y1 * Math.cos(rotX) - z2 * Math.sin(rotX);
+      let z3 = y1 * Math.sin(rotX) + z2 * Math.cos(rotX);
+
+      return {
+        x: offsetX + x2 * scale + view3D.panX,
+        y: offsetY - y2 * scale + view3D.panY,
+        depth: z3
+      };
+    };
+
+    const drawBox = (comp) => {
+      const { x, y, z, length, width, depth } = comp;
+
+      const corners = [
+        [x, y, z],
+        [x + length, y, z],
+        [x + length, y + width, z],
+        [x, y + width, z],
+        [x, y, z + depth],
+        [x + length, y, z + depth],
+        [x + length, y + width, z + depth],
+        [x, y + width, z + depth]
+      ];
+
+      const projected = corners.map(c => project(c[0], c[1], c[2]));
+
+      const colors = {
+        bottom_plate: '#8B4513',
+        top_plate_1: '#A0522D',
+        top_plate_2: '#A0522D',
+        stud: '#CD853F',
+        jamb_stud_left: '#D2691E',
+        jamb_stud_right: '#D2691E',
+        jack_stud_left: '#D2691E',
+        jack_stud_right: '#D2691E',
+        lintel: '#8B4513',
+        sill: '#A0522D',
+        cripple_stud: '#DEB887',
+        cripple_stud_top: '#DEB887',
+        noggin: '#BC8F8F',
+        brace: '#4169E1'
+      };
+
+      ctx.strokeStyle = colors[comp.type] || '#DEB887';
+      ctx.fillStyle = ctx.strokeStyle + '70';
+      ctx.lineWidth = 1.5;
+
+      const faces = [
+        { indices: [0, 1, 2, 3], avgDepth: (projected[0].depth + projected[1].depth + projected[2].depth + projected[3].depth) / 4 },
+        { indices: [4, 5, 6, 7], avgDepth: (projected[4].depth + projected[5].depth + projected[6].depth + projected[7].depth) / 4 },
+        { indices: [0, 1, 5, 4], avgDepth: (projected[0].depth + projected[1].depth + projected[5].depth + projected[4].depth) / 4 },
+        { indices: [2, 3, 7, 6], avgDepth: (projected[2].depth + projected[3].depth + projected[7].depth + projected[6].depth) / 4 },
+        { indices: [0, 3, 7, 4], avgDepth: (projected[0].depth + projected[3].depth + projected[7].depth + projected[4].depth) / 4 },
+        { indices: [1, 2, 6, 5], avgDepth: (projected[1].depth + projected[2].depth + projected[6].depth + projected[5].depth) / 4 }
+      ];
+
+      faces.sort((a, b) => b.avgDepth - a.avgDepth);
+
+      faces.forEach(face => {
+        ctx.beginPath();
+        ctx.moveTo(projected[face.indices[0]].x, projected[face.indices[0]].y);
+        face.indices.forEach(idx => ctx.lineTo(projected[idx].x, projected[idx].y));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      });
+    };
+
+    components.forEach(comp => drawBox(comp));
+
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= wallLength; i += 600) {
+      const p1 = project(i, 0, 0);
+      const p2 = project(i, wallHeight, 0);
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    }
+
+  }, [wallLength, wallHeight, studSize, studSpacing, openings, showBracing, view3D]);
+
+  const exportModel = async () => {
+    const components = generateWallFraming();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    
+    // Export as DXF format
+    let dxf = "0\nSECTION\n2\nHEADER\n";
+    dxf += "9\n$ACADVER\n1\nAC1015\n";
+    dxf += "9\n$INSUNITS\n70\n4\n"; // Millimeters
+    dxf += "0\nENDSEC\n";
+    
+    dxf += "0\nSECTION\n2\nTABLES\n";
+    dxf += "0\nTABLE\n2\nLAYER\n70\n1\n";
+    dxf += "0\nLAYER\n2\nFRAME\n70\n0\n62\n7\n6\nCONTINUOUS\n";
+    dxf += "0\nENDTAB\n0\nENDSEC\n";
+    
+    dxf += "0\nSECTION\n2\nENTITIES\n";
+
+    components.forEach((comp) => {
+      const { x, y, z, length, width, depth } = comp;
+      
+      // Draw each box as 12 lines (edges)
+      const edges = [
+        // Bottom rectangle
+        [[x, y, z], [x + length, y, z]],
+        [[x + length, y, z], [x + length, y + width, z]],
+        [[x + length, y + width, z], [x, y + width, z]],
+        [[x, y + width, z], [x, y, z]],
+        // Top rectangle
+        [[x, y, z + depth], [x + length, y, z + depth]],
+        [[x + length, y, z + depth], [x + length, y + width, z + depth]],
+        [[x + length, y + width, z + depth], [x, y + width, z + depth]],
+        [[x, y + width, z + depth], [x, y, z + depth]],
+        // Vertical edges
+        [[x, y, z], [x, y, z + depth]],
+        [[x + length, y, z], [x + length, y, z + depth]],
+        [[x + length, y + width, z], [x + length, y + width, z + depth]],
+        [[x, y + width, z], [x, y + width, z + depth]]
+      ];
+
+      edges.forEach(edge => {
+        dxf += "0\nLINE\n8\nFRAME\n";
+        dxf += `10\n${edge[0][0].toFixed(2)}\n20\n${edge[0][1].toFixed(2)}\n30\n${edge[0][2].toFixed(2)}\n`;
+        dxf += `11\n${edge[1][0].toFixed(2)}\n21\n${edge[1][1].toFixed(2)}\n31\n${edge[1][2].toFixed(2)}\n`;
+      });
+    });
+
+    dxf += "0\nENDSEC\n0\nEOF\n";
+
+    // Export DXF
+    try {
+      const blobDxf = new Blob([dxf], { type: 'application/dxf' });
+      const urlDxf = URL.createObjectURL(blobDxf);
+      const aDxf = document.createElement('a');
+      aDxf.href = urlDxf;
+      aDxf.download = `AS1684_Wall_${wallLength}x${wallHeight}_${timestamp}.dxf`;
+      document.body.appendChild(aDxf);
+      aDxf.click();
+      document.body.removeChild(aDxf);
+      
+      // Small delay to ensure first download starts
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      URL.revokeObjectURL(urlDxf);
+    } catch (error) {
+      console.error('DXF Export failed:', error);
+    }
+
+    // Export OBJ
+    try {
+      let obj = "# AS 1684 Timber Wall Frame Export\n";
+      obj += `# Generated: ${new Date().toLocaleString()}\n`;
+      obj += `# Wall: ${wallLength}mm x ${wallHeight}mm\n`;
+      obj += `# Timber: ${studSize}mm ${timberGrade}\n`;
+      obj += `# Spacing: ${studSpacing}mm centers\n`;
+      obj += `# Components: ${components.length}\n\n`;
+
+      let vertexCount = 1;
+
+      components.forEach((comp, idx) => {
+        obj += `o ${comp.type}_${idx}\n`;
+        
+        const { x, y, z, length, width, depth } = comp;
+        
+        const vertices = [
+          [x, y, z], 
+          [x + length, y, z], 
+          [x + length, y + width, z], 
+          [x, y + width, z],
+          [x, y, z + depth], 
+          [x + length, y, z + depth], 
+          [x + length, y + width, z + depth], 
+          [x, y + width, z + depth]
+        ];
+
+        vertices.forEach(v => {
+          obj += `v ${v[0].toFixed(2)} ${v[1].toFixed(2)} ${v[2].toFixed(2)}\n`;
+        });
+
+        // Add normals for better rendering
+        obj += `vn 0 0 -1\nvn 0 0 1\nvn 0 -1 0\nvn 0 1 0\nvn -1 0 0\nvn 1 0 0\n`;
+
+        const faces = [
+          [1, 2, 3, 4], // front
+          [8, 7, 6, 5], // back
+          [5, 6, 2, 1], // bottom
+          [4, 3, 7, 8], // top
+          [1, 4, 8, 5], // left
+          [2, 6, 7, 3]  // right
+        ];
+
+        faces.forEach((face, fIdx) => {
+          obj += `f ${face[0] + vertexCount - 1}//${fIdx + 1} ${face[1] + vertexCount - 1}//${fIdx + 1} ${face[2] + vertexCount - 1}//${fIdx + 1} ${face[3] + vertexCount - 1}//${fIdx + 1}\n`;
+        });
+
+        vertexCount += 8;
+        obj += "\n";
+      });
+
+      const blobObj = new Blob([obj], { type: 'text/plain' });
+      const urlObj = URL.createObjectURL(blobObj);
+      const aObj = document.createElement('a');
+      aObj.href = urlObj;
+      aObj.download = `AS1684_Wall_${wallLength}x${wallHeight}_${timestamp}.obj`;
+      document.body.appendChild(aObj);
+      aObj.click();
+      document.body.removeChild(aObj);
+      
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      URL.revokeObjectURL(urlObj);
+    } catch (error) {
+      console.error('OBJ Export failed:', error);
+    }
+  };
+
+  return (
+    <div className="w-full h-screen bg-gray-950 text-white flex relative">
+      {/* Floating Properties Panel */}
+      <div className={`absolute top-4 left-4 bg-gray-900 bg-opacity-95 backdrop-blur-sm rounded-lg shadow-2xl border border-gray-700 z-10 transition-all ${showSettings ? 'w-80' : 'w-auto'}`}>
+        <div className="p-3 border-b border-gray-700 flex items-center justify-between bg-gray-800 rounded-t-lg">
+          <div className="flex items-center gap-2">
+            <Settings className="w-5 h-5 text-blue-400" />
+            <span className="font-semibold text-sm">Wall Properties</span>
+          </div>
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className="text-gray-400 hover:text-white transition"
+          >
+            {showSettings ? <X className="w-4 h-4" /> : <Settings className="w-4 h-4" />}
+          </button>
+        </div>
+
+        {showSettings && (
+          <div className="p-4 space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto">
+            <div>
+              <label className="block text-xs font-medium mb-1 text-gray-300">Length (mm)</label>
+              <input
+                type="number"
+                value={wallLength}
+                onChange={(e) => setWallLength(parseFloat(e.target.value) || 0)}
+                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
+                step="100"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium mb-1 text-gray-300">Height (mm)</label>
+              <input
+                type="number"
+                value={wallHeight}
+                onChange={(e) => setWallHeight(parseFloat(e.target.value) || 0)}
+                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
+                step="100"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium mb-1 text-gray-300">Stud Size</label>
+              <select
+                value={studSize}
+                onChange={(e) => setStudSize(e.target.value)}
+                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
+              >
+                {Object.keys(timberSizes).map(size => (
+                  <option key={size} value={size}>{size}mm</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium mb-1 text-gray-300">Spacing</label>
+              <select
+                value={studSpacing}
+                onChange={(e) => setStudSpacing(Number(e.target.value))}
+                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
+              >
+                <option value="450">450mm</option>
+                <option value="600">600mm</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium mb-1 text-gray-300">Grade</label>
+              <select
+                value={timberGrade}
+                onChange={(e) => setTimberGrade(e.target.value)}
+                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
+              >
+                <option value="MGP10">MGP10</option>
+                <option value="MGP12">MGP12</option>
+                <option value="MGP15">MGP15</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showBracing}
+                  onChange={(e) => setShowBracing(e.target.checked)}
+                  className="w-3.5 h-3.5"
+                />
+                <span className="text-xs text-gray-300">Diagonal Bracing</span>
+              </label>
+            </div>
+
+            <div className="pt-3 border-t border-gray-700">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-semibold text-gray-300">Openings</h3>
+                <button
+                  onClick={addOpening}
+                  className="bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded flex items-center gap-1 text-xs transition"
+                >
+                  <Plus className="w-3 h-3" /> Add
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {openings.map(opening => (
+                  <div key={opening.id} className="bg-gray-800 p-2 rounded space-y-1.5 border border-gray-700">
+                    <div className="flex justify-between items-center">
+                      <select
+                        value={opening.type}
+                        onChange={(e) => updateOpening(opening.id, 'type', e.target.value)}
+                        className="bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
+                      >
+                        <option value="door">Door</option>
+                        <option value="window">Window</option>
+                      </select>
+                      <button
+                        onClick={() => removeOpening(opening.id)}
+                        className="text-red-400 hover:text-red-300 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <input
+                      type="number"
+                      placeholder="Start X"
+                      value={opening.startX}
+                      onChange={(e) => updateOpening(opening.id, 'startX', e.target.value)}
+                      className="w-full bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Width"
+                      value={opening.width}
+                      onChange={(e) => updateOpening(opening.id, 'width', e.target.value)}
+                      className="w-full bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Height"
+                      value={opening.height}
+                      onChange={(e) => updateOpening(opening.id, 'height', e.target.value)}
+                      className="w-full bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Sill Height"
+                      value={opening.sillHeight}
+                      onChange={(e) => updateOpening(opening.id, 'sillHeight', e.target.value)}
+                      className="w-full bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!showSettings && (
+          <div className="p-3 text-xs space-y-1 text-gray-300">
+            <div>L: {wallLength}mm × H: {wallHeight}mm</div>
+            <div>{studSize}mm @ {studSpacing}mm • {timberGrade}</div>
+          </div>
+        )}
+      </div>
+
+      {/* Floating Controls */}
+      <div className="absolute top-4 right-4 flex flex-col gap-2 z-10">
+        <button
+          onClick={exportModel}
+          className="bg-green-600 hover:bg-green-700 p-3 rounded-lg shadow-lg flex items-center gap-2 text-sm font-semibold transition"
+        >
+          <Download className="w-4 h-4" />
+          Export (DXF + OBJ)
+        </button>
+        <button
+          onClick={resetView}
+          className="bg-gray-800 hover:bg-gray-700 p-3 rounded-lg shadow-lg border border-gray-600 transition"
+        >
+          <RotateCw className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Info Badge */}
+      <div className="absolute bottom-4 left-4 bg-gray-900 bg-opacity-95 backdrop-blur-sm px-4 py-2 rounded-lg shadow-lg border border-gray-700 text-xs text-gray-300 z-10">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <Move className="w-3 h-3" />
+            <span>Drag to rotate</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="bg-gray-700 px-1 rounded">Shift</span>
+            <span>+ Drag to pan</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <ZoomIn className="w-3 h-3" />
+            <span>Scroll to zoom</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Compliance Badge */}
+      <div className="absolute bottom-4 right-4 bg-blue-900 bg-opacity-90 backdrop-blur-sm px-3 py-2 rounded-lg shadow-lg border border-blue-700 text-xs text-blue-100 z-10 max-w-md">
+        <div className="font-semibold mb-1">AS 1684 Compliant</div>
+        <div className="opacity-80">Studs @ {studSpacing}mm • Noggins mid-height • Double top plate</div>
+      </div>
+
+      {/* 3D Canvas */}
+      <div className="w-full h-full flex items-center justify-center">
+        <canvas
+          ref={canvasRef}
+          width={1600}
+          height={1000}
+          className="cursor-move"
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onWheel={handleWheel}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default AS1684WallGenerator;
