@@ -67,12 +67,12 @@ const generateSingleWallFrame = (wall) => {
             });
         };
 
-        // --- RESTORED ARCHITECTURAL COLORS ---
-        const COL_PLATE = '#8B5A2B';  // Classic Brown
-        const COL_STUD = '#DEB887';   // Burlywood (Framing Pine)
-        const COL_NOGGIN = '#BC8F8F'; // Rosy Brown
-        const COL_LINTEL = '#8B4513'; // Saddle Brown
-        const COL_BRACE = '#708090';  // Slate Gray
+        // --- REAL WORLD SITE COLORS ---
+        const COL_PLATE = '#5D4037'; // Dark Hardwood/Treated color
+        const COL_STUD = '#E3C08D';  // Pine Yellow
+        const COL_NOGGIN = '#DFA6A6'; // Pinkish Primer (Common in AU)
+        const COL_LINTEL = '#8D6E63'; // Laminated Beam color
+        const COL_BRACE = '#607D8B';  // Metal Grey
 
         // --- PLATES ---
         const plateStartX = -thickness / 2;
@@ -139,8 +139,8 @@ const generateSingleWallFrame = (wall) => {
                 addMember('Common Stud', studX, startY, 0, thickness, endY - startY, depth, COL_STUD);
                 verticalMembers.push({ x: studX });
             } else {
-                if (lowerStud) addMember('Jack Stud', studX, lowerStud.y, 0, thickness, lowerStud.h, depth, '#EECFA1');
-                if (upperStud) addMember('Cripple Stud', studX, upperStud.y, 0, thickness, upperStud.h, depth, '#EECFA1');
+                if (lowerStud) addMember('Jack Stud', studX, lowerStud.y, 0, thickness, lowerStud.h, depth, COL_STUD);
+                if (upperStud) addMember('Cripple Stud', studX, upperStud.y, 0, thickness, upperStud.h, depth, COL_STUD);
             }
         });
 
@@ -254,6 +254,10 @@ const AS1684WallGenerator = () => {
   // Drawing State
   const [drawState, setDrawState] = useState({ active: false, start: null, current: null, snapped: null });
   
+  // Modification State (Moving points)
+  const [dragHandle, setDragHandle] = useState(null); // { wallId, type: 'start'|'end' }
+  const [hoverHandle, setHoverHandle] = useState(null); // { wallId, type: 'start'|'end' }
+
   // Mouse / Canvas state
   const [isDragging, setIsDragging] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
@@ -303,47 +307,38 @@ const AS1684WallGenerator = () => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
         if (drawState.active) {
-          // Cancel drawing logic
           setDrawState({ active: false, start: null, current: null, snapped: null });
+        }
+        if (dragHandle) {
+            setDragHandle(null);
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [drawState.active]);
+  }, [drawState.active, dragHandle]);
 
   // --- PLAN VIEW LOGIC ---
   const getPlanCoordinates = (e) => {
     if (!planCanvasRef.current) return { x: 0, y: 0 };
     const rect = planCanvasRef.current.getBoundingClientRect();
-    
-    // Scale adjustment for High-DPI canvas
     const scaleX = planCanvasRef.current.width / rect.width;
     const scaleY = planCanvasRef.current.height / rect.height;
-
-    // Canvas Space Coordinates (Raw pixels)
     const rawX = (e.clientX - rect.left) * scaleX;
     const rawY = (e.clientY - rect.top) * scaleY;
-
-    // World Space Coordinates (Apply Plan View Pan/Zoom)
-    // Center of canvas is (width/2, height/2) + pan
-    // mx = (Raw - Center - Pan) / Zoom
     const mx = (rawX - planCanvasRef.current.width/2 - planView.x) / planView.zoom;
     const my = (rawY - planCanvasRef.current.height/2 - planView.y) / planView.zoom;
-    
     return { x: mx, y: my };
   };
 
-  const getSnappedPosition = (mx, my) => {
-    // 1. Grid Snap (100mm)
+  const getSnappedPosition = (mx, my, excludeWallId = null) => {
     let snapX = Math.round(mx / 100) * 100;
     let snapY = Math.round(my / 100) * 100;
     let isSnapToWall = false;
-
-    // 2. Wall Endpoint Snap (Radius = 25px visual range, scaled by zoom)
     const snapRadius = 25 / planView.zoom; 
 
     walls.forEach(w => {
+      if (w.id === excludeWallId) return; // Don't snap to self if modifying self
       const startX = w.position.x;
       const startY = w.position.y;
       const rad = w.position.rotation * (Math.PI/180);
@@ -361,23 +356,46 @@ const AS1684WallGenerator = () => {
     return { x: snapX, y: snapY, isSnapToWall };
   };
 
+  // Check for hover over endpoints
+  const checkHoverHandle = (mx, my) => {
+      const handleRadius = 15 / planView.zoom;
+      let found = null;
+
+      walls.forEach(w => {
+          const p1 = w.position;
+          const rad = w.position.rotation * (Math.PI/180);
+          const p2 = { x: p1.x + Math.cos(rad)*w.length, y: p1.y + Math.sin(rad)*w.length };
+
+          if (dist({x:mx, y:my}, p1) < handleRadius) found = { wallId: w.id, type: 'start' };
+          else if (dist({x:mx, y:my}, p2) < handleRadius) found = { wallId: w.id, type: 'end' };
+      });
+      
+      setHoverHandle(found);
+      return found;
+  };
+
   const handlePlanMouseDown = (e) => {
     const { x: mx, y: my } = getPlanCoordinates(e);
 
+    // 1. Check if clicking a handle to modify
+    const clickedHandle = checkHoverHandle(mx, my);
+    if (clickedHandle && !drawState.active) {
+        setDragHandle(clickedHandle);
+        setSelectedWallId(clickedHandle.wallId);
+        return;
+    }
+
+    // 2. Drawing Logic
     if (activeTab === 'walls' && drawState.active) {
-        // Use the robust snap logic
         const snapped = getSnappedPosition(mx, my);
         const finalX = snapped.x;
         const finalY = snapped.y;
 
         if (!drawState.start) {
-            // Start Drawing
             setDrawState({ ...drawState, start: { x: finalX, y: finalY }, current: { x: finalX, y: finalY }, snapped: snapped.isSnapToWall });
         } else {
-            // Finish Drawing Wall
             const p1 = drawState.start;
             const p2 = { x: finalX, y: finalY };
-            
             const dx = p2.x - p1.x;
             const dy = p2.y - p1.y;
             const len = Math.sqrt(dx*dx + dy*dy);
@@ -397,44 +415,107 @@ const AS1684WallGenerator = () => {
                     showBracing: true
                 }]);
                 setSelectedWallId(newId);
-                // Chain: Start next wall from end of this one
                 setDrawState({ ...drawState, start: p2, current: p2, snapped: snapped.isSnapToWall });
             }
         }
     } else {
-        // Panning Init
+        // 3. Panning Logic
         setPlanDrag({ active: true, startX: e.clientX, startY: e.clientY });
     }
   };
 
   const handlePlanMouseMove = (e) => {
+      const { x: mx, y: my } = getPlanCoordinates(e);
+
+      // Handle Modifying Wall (Dragging Point)
+      if (dragHandle) {
+          const snapped = getSnappedPosition(mx, my, dragHandle.wallId);
+          const target = { x: snapped.x, y: snapped.y };
+          
+          // SHIFT KEY ORTHO CONSTRAINT
+          if (e.shiftKey) {
+             const w = walls.find(w => w.id === dragHandle.wallId);
+             if (w) {
+                 const rad = w.position.rotation * (Math.PI/180);
+                 const pStart = w.position;
+                 const pEnd = { x: pStart.x + Math.cos(rad)*w.length, y: pStart.y + Math.sin(rad)*w.length };
+                 const refPoint = dragHandle.type === 'start' ? pEnd : pStart;
+
+                 const dx = Math.abs(target.x - refPoint.x);
+                 const dy = Math.abs(target.y - refPoint.y);
+
+                 if (dx > dy) target.y = refPoint.y; 
+                 else target.x = refPoint.x;
+             }
+          }
+          
+          setWalls(prev => prev.map(w => {
+              if (w.id !== dragHandle.wallId) return w;
+              
+              let newPos = w.position;
+              let newLen = w.length;
+              
+              if (dragHandle.type === 'start') {
+                  const rad = w.position.rotation * (Math.PI/180);
+                  const pEnd = { x: w.position.x + Math.cos(rad)*w.length, y: w.position.y + Math.sin(rad)*w.length };
+                  
+                  const dx = pEnd.x - target.x;
+                  const dy = pEnd.y - target.y;
+                  newLen = Math.sqrt(dx*dx + dy*dy);
+                  const newRot = Math.atan2(dy, dx) * (180/Math.PI);
+                  
+                  newPos = { x: target.x, y: target.y, rotation: Math.round(newRot) };
+                  
+              } else {
+                  const dx = target.x - w.position.x;
+                  const dy = target.y - w.position.y;
+                  newLen = Math.sqrt(dx*dx + dy*dy);
+                  const newRot = Math.atan2(dy, dx) * (180/Math.PI);
+                  newPos = { ...w.position, rotation: Math.round(newRot) };
+              }
+              return { ...w, position: newPos, length: Math.round(newLen) };
+          }));
+          return;
+      }
+
+      // Drawing Tool
       if (activeTab === 'walls' && drawState.active) {
-        const { x: mx, y: my } = getPlanCoordinates(e);
         const snapped = getSnappedPosition(mx, my);
-        
         let targetX = snapped.x;
         let targetY = snapped.y;
 
-        // Ortho Snap helper (only if dragging)
+        // Draw State Ortho
         if (drawState.start) {
-            if (Math.abs(targetX - drawState.start.x) < (300/planView.zoom)) targetX = drawState.start.x;
-            if (Math.abs(targetY - drawState.start.y) < (300/planView.zoom)) targetY = drawState.start.y;
+            if (e.shiftKey) {
+                const dx = Math.abs(targetX - drawState.start.x);
+                const dy = Math.abs(targetY - drawState.start.y);
+                if (dx > dy) targetY = drawState.start.y;
+                else targetX = drawState.start.x;
+            } else {
+                if (Math.abs(targetX - drawState.start.x) < (300/planView.zoom)) targetX = drawState.start.x;
+                if (Math.abs(targetY - drawState.start.y) < (300/planView.zoom)) targetY = drawState.start.y;
+            }
         }
-
         setDrawState(prev => ({ ...prev, current: { x: targetX, y: targetY }, snapped: snapped.isSnapToWall }));
-      } else if (planDrag.active) {
+      } 
+      // Panning
+      else if (planDrag.active) {
           const dx = e.clientX - planDrag.startX;
           const dy = e.clientY - planDrag.startY;
           setPlanView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
           setPlanDrag({ ...planDrag, startX: e.clientX, startY: e.clientY });
       }
+      // Hover Check
+      else {
+          checkHoverHandle(mx, my);
+      }
   };
 
   const handlePlanMouseUp = () => {
       setPlanDrag({ ...planDrag, active: false });
+      setDragHandle(null);
   };
 
-  // --- PLAN VIEW ZOOM HANDLER ---
   const handlePlanWheel = (e) => {
       e.preventDefault();
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
@@ -628,7 +709,6 @@ const AS1684WallGenerator = () => {
       const cx = width/2 + planView.x;
       const cy = height/2 + planView.y;
       
-      // Draw Grid Lines (1m spacing)
       ctx.strokeStyle = '#334155';
       ctx.lineWidth = 1;
       const gridSize = 1000 * planView.zoom;
@@ -648,16 +728,18 @@ const AS1684WallGenerator = () => {
           const endX = startX + (Math.cos(rad) * w.length * planView.zoom);
           const endY = startY + (Math.sin(rad) * w.length * planView.zoom);
           
+          const isSel = w.id === selectedWallId;
+          const isHover = hoverHandle && hoverHandle.wallId === w.id;
+
           // Wall Line
-          ctx.strokeStyle = w.id === selectedWallId ? '#3b82f6' : '#94a3b8';
-          ctx.lineWidth = 90 * planView.zoom; // Scale wall thickness
+          ctx.strokeStyle = isSel ? '#3b82f6' : '#94a3b8';
+          ctx.lineWidth = 90 * planView.zoom; 
           ctx.lineCap = 'butt';
           ctx.beginPath();
           ctx.moveTo(startX, startY);
           ctx.lineTo(endX, endY);
           ctx.stroke();
           
-          // Centerline
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 1;
           ctx.beginPath();
@@ -665,22 +747,22 @@ const AS1684WallGenerator = () => {
           ctx.lineTo(endX, endY);
           ctx.stroke();
 
-          // Endpoints
-          ctx.fillStyle = '#fff';
-          ctx.beginPath(); ctx.arc(startX, startY, 3, 0, Math.PI*2); ctx.fill();
-          ctx.beginPath(); ctx.arc(endX, endY, 3, 0, Math.PI*2); ctx.fill();
+          // Endpoints (Interactive)
+          const handleSize = 5;
+          ctx.fillStyle = (isHover && hoverHandle.type === 'start') ? '#22c55e' : '#fff';
+          ctx.beginPath(); ctx.arc(startX, startY, handleSize, 0, Math.PI*2); ctx.fill();
+          
+          ctx.fillStyle = (isHover && hoverHandle.type === 'end') ? '#22c55e' : '#fff';
+          ctx.beginPath(); ctx.arc(endX, endY, handleSize, 0, Math.PI*2); ctx.fill();
       });
 
-      // Draw Active Temp Wall
+      // Draw Drawing Preview
       if (drawState.active) {
           const cursorPos = drawState.current || { x: 0, y: 0 };
-          const sx = cx + (cursorPos.x * planView.zoom); // Snap target X screen
-          const sy = cy + (cursorPos.y * planView.zoom); // Snap target Y screen
+          const sx = cx + (cursorPos.x * planView.zoom);
+          const sy = cy + (cursorPos.y * planView.zoom);
 
-          // --- VISUAL FEEDBACK: CURSOR & SNAP TARGET ---
-          
-          // 1. Draw Raw Input Cursor (Blue Crosshair) to show where mouse actually is
-          ctx.strokeStyle = '#3b82f6'; // Blue
+          ctx.strokeStyle = '#3b82f6';
           ctx.lineWidth = 1;
           const crossSize = 10;
           ctx.beginPath();
@@ -688,14 +770,10 @@ const AS1684WallGenerator = () => {
           ctx.moveTo(sx, sy - crossSize); ctx.lineTo(sx, sy + crossSize);
           ctx.stroke();
 
-          // 2. Draw Snap Target (Red Circle) ONLY if actually snapped
           if (drawState.snapped) {
-              ctx.strokeStyle = '#ef4444'; // Red
+              ctx.strokeStyle = '#ef4444';
               ctx.lineWidth = 2;
-              ctx.beginPath(); 
-              ctx.arc(sx, sy, 8, 0, Math.PI*2); 
-              ctx.stroke();
-              
+              ctx.beginPath(); ctx.arc(sx, sy, 8, 0, Math.PI*2); ctx.stroke();
               ctx.fillStyle = '#ef4444';
               ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI*2); ctx.fill();
           }
@@ -704,16 +782,15 @@ const AS1684WallGenerator = () => {
               const startScreenX = cx + (drawState.start.x * planView.zoom);
               const startScreenY = cy + (drawState.start.y * planView.zoom);
               
-              ctx.strokeStyle = '#22c55e'; // Green drag line
-              ctx.lineWidth = 90 * planView.zoom; // Show actual thickness preview
-              ctx.globalAlpha = 0.5; // Transparent preview
+              ctx.strokeStyle = '#22c55e';
+              ctx.lineWidth = 90 * planView.zoom;
+              ctx.globalAlpha = 0.5;
               ctx.beginPath();
               ctx.moveTo(startScreenX, startScreenY);
               ctx.lineTo(sx, sy);
               ctx.stroke();
               ctx.globalAlpha = 1.0;
               
-              // Center line
               ctx.strokeStyle = '#fff';
               ctx.lineWidth = 2;
               ctx.beginPath();
@@ -721,7 +798,6 @@ const AS1684WallGenerator = () => {
               ctx.lineTo(sx, sy);
               ctx.stroke();
               
-              // Length Label
               const d = dist(drawState.start, cursorPos);
               ctx.fillStyle = '#fff';
               ctx.font = '12px monospace';
@@ -729,7 +805,7 @@ const AS1684WallGenerator = () => {
           }
       }
 
-  }, [walls, viewMode, planView, selectedWallId, drawState]);
+  }, [walls, viewMode, planView, selectedWallId, drawState, hoverHandle]);
 
   // --- HANDLERS ---
   const handleMouseDown = (e) => {
@@ -779,7 +855,7 @@ const AS1684WallGenerator = () => {
                   <div className="flex gap-2">
                      <button onClick={() => { setViewMode('plan'); setDrawState(s => ({...s, active: !s.active, start: null})); }} 
                              className={`flex-1 p-2 rounded text-xs text-center border transition flex items-center justify-center gap-2 ${drawState.active ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-700 border-gray-600 hover:bg-gray-600'}`}>
-                        {drawState.active ? 'Drawing... (Esc to Cancel)' : 'Draw Wall'}
+                        {drawState.active ? 'Drawing... (Esc to Cancel, Shift for Ortho)' : 'Draw Wall'}
                      </button>
                   </div>
                   <div className="text-[10px] text-gray-500 mt-2">
