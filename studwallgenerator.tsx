@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle, Layers, ShoppingCart, Home, Copy, LayoutTemplate, Box, PenTool, MousePointer, ZoomOut, Palette, ArrowLeftRight } from 'lucide-react';
+import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle, Layers, ShoppingCart, Home, Copy, LayoutTemplate, Box, PenTool, MousePointer, ZoomOut, Palette, ArrowLeftRight, BrickWall } from 'lucide-react';
 
 // --- CONSTANTS ---
 const TIMBER_SIZES = {
@@ -44,7 +44,7 @@ const dist = (p1, p2) => {
 }
 
 // --- CORE ALGORITHM: GENERATE SINGLE WALL ---
-const generateSingleWallFrame = (wall, materialsList) => {
+const generateSingleWallFrame = (wall, materialsList, trimStart = 0, trimEnd = 0, cornerTypeStart = null, cornerTypeEnd = null) => {
     try {
         const { length, height, studSize, studSpacing, openings, showBracing, isFlipped } = wall;
         
@@ -89,65 +89,72 @@ const generateSingleWallFrame = (wall, materialsList) => {
         const COL_NOGGIN = '#DFA6A6'; 
         const COL_LINTEL = '#8D6E63'; 
         const COL_BRACE = '#607D8B';
-        const COL_LINING_INT = '#E0E0E0';
-        const COL_LINING_EXT = '#A1887F';
+        
+        // Calculate Effective Frame Length (Physical timber length)
+        const frameStart = trimStart; 
+        const frameEnd = numLen - trimEnd; 
+        const frameLen = frameEnd - frameStart;
 
-        // --- LININGS (DYNAMIC with FLIP) ---
-        // Standard: Internal = Back (Z<0), External = Front (Z>depth)
-        // Flipped: Internal = Front (Z>depth), External = Back (Z<0)
-
-        // Internal Lining
+        // --- LININGS ---
         if (wall.internalLining && wall.internalLining !== 'none') {
             const mat = materialsList.find(m => m.id === wall.internalLining) || DEFAULT_MATERIALS[1];
-            // If not flipped, offset backwards. If flipped, offset forwards from front face.
             const zPos = !isFlipped ? (0 - (mat.cavity || 0) - mat.thickness) : (depth + (mat.cavity || 0));
             addMember(`Int. ${mat.name}`, 0, 0, zPos, numLen, numHeight, mat.thickness, mat.color, 0, mat.opacity);
         }
-        
-        // External Lining
         if (wall.externalLining && wall.externalLining !== 'none') {
             const mat = materialsList.find(m => m.id === wall.externalLining) || DEFAULT_MATERIALS[4];
-            // If not flipped, offset forwards. If flipped, offset backwards from back face.
             const zPos = !isFlipped ? (depth + (mat.cavity || 0)) : (0 - (mat.cavity || 0) - mat.thickness);
             addMember(`Ext. ${mat.name}`, 0, 0, zPos, numLen, numHeight, mat.thickness, mat.color, 0, mat.opacity);
         }
 
         // --- PLATES ---
-        const plateStartX = -thickness / 2;
-        const fullPlateLength = numLen + thickness;
-
-        let plateX = plateStartX;
+        // Bottom Plate
         const sortedOpenings = [...openings].sort((a, b) => (parseFloat(a.startX)||0) - (parseFloat(b.startX)||0));
         const doorOpenings = sortedOpenings.filter(o => (parseFloat(o.sillHeight)||0) === 0);
         
         if (doorOpenings.length === 0) {
-            addMember('Bottom Plate', plateStartX, 0, 0, fullPlateLength, thickness, depth, COL_PLATE);
+            addMember('Bottom Plate', frameStart, 0, 0, frameLen, thickness, depth, COL_PLATE);
         } else {
+            let currentX = frameStart;
             doorOpenings.forEach(door => {
-                const dStart = parseFloat(door.startX) || 0;
-                const dWidth = parseFloat(door.width) || 0;
-                if (dStart > plateX) {
-                    addMember('Bottom Plate', plateX, 0, 0, dStart - plateX, thickness, depth, COL_PLATE);
+                const dStart = parseFloat(door.startX);
+                const dWidth = parseFloat(door.width);
+                if (dStart > currentX) {
+                    addMember('Bottom Plate', currentX, 0, 0, dStart - currentX, thickness, depth, COL_PLATE);
                 }
-                plateX = dStart + dWidth;
+                currentX = dStart + dWidth;
             });
-            const finalPlateEnd = numLen + thickness/2;
-            if (plateX < finalPlateEnd) {
-                addMember('Bottom Plate', plateX, 0, 0, finalPlateEnd - plateX, thickness, depth, COL_PLATE);
+            if (currentX < frameEnd) {
+                 addMember('Bottom Plate', currentX, 0, 0, frameEnd - currentX, thickness, depth, COL_PLATE);
             }
         }
 
-        addMember('Top Plate (Lower)', plateStartX, numHeight - (thickness * 2), 0, fullPlateLength, thickness, depth, COL_PLATE);
-        addMember('Top Plate (Upper)', plateStartX, numHeight - thickness, 0, fullPlateLength, thickness, depth, COL_PLATE);
+        // Top Plates (Continuous)
+        addMember('Top Plate (Lower)', frameStart, numHeight - (thickness * 2), 0, frameLen, thickness, depth, COL_PLATE);
+        addMember('Top Plate (Upper)', frameStart, numHeight - thickness, 0, frameLen, thickness, depth, COL_PLATE);
+
+        // --- CORNER STUDS ---
+        if (cornerTypeStart === 'through') {
+            addMember('Corner Stud 1', 0, thickness, 0, thickness, numHeight - 3*thickness, depth, COL_STUD);
+            addMember('Corner Stud 2', depth + 10, thickness, 0, thickness, numHeight - 3*thickness, depth, COL_STUD);
+            addMember('Corner Block', thickness, numHeight/2, 0, depth+10-thickness, thickness, depth, COL_NOGGIN);
+        }
+
+        if (cornerTypeEnd === 'through') {
+             addMember('Corner Stud 1', numLen - thickness, thickness, 0, thickness, numHeight - 3*thickness, depth, COL_STUD);
+             addMember('Corner Stud 2', numLen - depth - 10 - thickness, thickness, 0, thickness, numHeight - 3*thickness, depth, COL_STUD);
+             addMember('Corner Block', numLen - depth - 10, numHeight/2, 0, depth+10-thickness, thickness, depth, COL_NOGGIN);
+        }
 
         // --- STUDS ---
         const gridPositions = [];
-        const safeSpacing = Math.max(100, numSpacing); 
-        for (let x = 0; x <= numLen; x += safeSpacing) gridPositions.push(x);
-        if (gridPositions[gridPositions.length - 1] !== numLen) gridPositions.push(numLen);
-
-        // Track verticals for noggins
-        const verticalMembers = []; 
+        gridPositions.push(frameStart);
+        let currentX = frameStart + numSpacing;
+        while (currentX < frameEnd - thickness) {
+            gridPositions.push(currentX);
+            currentX += numSpacing;
+        }
+        gridPositions.push(frameEnd - thickness);
 
         gridPositions.forEach(xPos => {
             let startY = thickness;
@@ -159,74 +166,63 @@ const generateSingleWallFrame = (wall, materialsList) => {
             for (const op of openings) {
                 const opStart = parseFloat(op.startX) || 0;
                 const opWidth = parseFloat(op.width) || 0;
-                const opHeight = parseFloat(op.height) || 0;
-                const opSill = parseFloat(op.sillHeight) || 0;
                 const opEnd = opStart + opWidth;
+                
+                const studCenter = xPos + thickness/2;
 
-                if (xPos > opStart + 10 && xPos < opEnd - 10) {
+                if (studCenter > opStart && studCenter < opEnd) {
                     isDeleted = true;
+                    const opSill = parseFloat(op.sillHeight) || 0;
+                    const opHeight = parseFloat(op.height) || 0;
+                    const lintelDepth = opWidth > 1200 ? 190 : 140;
+                    
                     if (opSill > 0) lowerStud = { y: thickness, h: opSill - thickness };
-                    let lintelDepth = opWidth > 1200 ? 190 : 140; 
                     const spaceAbove = (numHeight - (thickness * 2)) - (opSill + opHeight + lintelDepth);
                     if (spaceAbove > 20) upperStud = { y: opSill + opHeight + lintelDepth, h: spaceAbove };
                     break;
                 }
             }
 
-            const studX = xPos - (thickness/2);
             if (!isDeleted) {
-                addMember('Common Stud', studX, startY, 0, thickness, endY - startY, depth, COL_STUD);
-                verticalMembers.push({ x: studX });
+                addMember('Common Stud', xPos, startY, 0, thickness, endY - startY, depth, COL_STUD);
             } else {
-                if (lowerStud) addMember('Jack Stud', studX, lowerStud.y, 0, thickness, lowerStud.h, depth, COL_STUD);
-                if (upperStud) addMember('Cripple Stud', studX, upperStud.y, 0, thickness, upperStud.h, depth, COL_STUD);
+                if (lowerStud) addMember('Jack Stud', xPos, lowerStud.y, 0, thickness, lowerStud.h, depth, COL_STUD);
+                if (upperStud) addMember('Cripple Stud', xPos, upperStud.y, 0, thickness, upperStud.h, depth, COL_STUD);
             }
         });
 
         // --- OPENINGS ---
         openings.forEach(op => {
-            const opStart = parseFloat(op.startX) || 0;
-            const opWidth = parseFloat(op.width) || 0;
-            const opHeight = parseFloat(op.height) || 0;
-            const opSill = parseFloat(op.sillHeight) || 0;
+            const opStart = parseFloat(op.startX);
+            const opWidth = parseFloat(op.width);
+            const opHeight = parseFloat(op.height);
+            const opSill = parseFloat(op.sillHeight);
             const headHeight = opSill + opHeight;
             let lintelDepth = opWidth > 1200 ? 190 : 140;
 
-            const leftJambX = opStart - thickness;
-            addMember('Jamb Stud', leftJambX, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, COL_STUD);
-            verticalMembers.push({ x: leftJambX });
-
-            const rightJambX = opStart + opWidth;
-            addMember('Jamb Stud', rightJambX, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, COL_STUD);
-            verticalMembers.push({ x: rightJambX });
-
+            addMember('Jamb Stud', opStart - thickness, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, COL_STUD);
+            addMember('Jamb Stud', opStart + opWidth, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, COL_STUD);
             addMember('Lintel', opStart - thickness, headHeight, 0, opWidth + (thickness * 2), lintelDepth, depth, COL_LINTEL);
+            
             if (opSill > 0) addMember('Sill Trimmer', opStart, opSill, 0, opWidth, thickness, depth, COL_PLATE);
         });
 
         // --- NOGGINS ---
-        verticalMembers.sort((a, b) => a.x - b.x);
-        const uniqueVerticals = verticalMembers.filter((v, i, a) => i === 0 || Math.abs(v.x - a[i-1].x) > 1);
+        // Re-using grid positions for noggin gaps to ensure stability
         const nogginCenter = numHeight / 2;
-
-        for (let i = 0; i < uniqueVerticals.length - 1; i++) {
-            const v1 = uniqueVerticals[i];
-            const v2 = uniqueVerticals[i+1];
+        for (let i = 0; i < gridPositions.length - 1; i++) {
+            const x1 = gridPositions[i];
+            const x2 = gridPositions[i+1];
+            const gapStart = x1 + thickness + 0.5; // Physical gap
+            const gapWidth = (x2 - gapStart) - 0.5;
             
-            const gapStart = v1.x + thickness + 0.5;
-            const gapWidth = (v2.x - gapStart) - 0.5;
+            if (gapWidth < 10) continue;
 
-            if (gapWidth < 10) continue; 
-
-            const midX = gapStart + (gapWidth / 2);
+            const midX = gapStart + (gapWidth/2);
             let insideOpening = false;
-            for (const op of openings) {
-                const s = parseFloat(op.startX);
-                const w = parseFloat(op.width);
-                const sill = parseFloat(op.sillHeight);
-                const h = parseFloat(op.height);
-                if (midX > s && midX < s + w) {
-                    if (nogginCenter > sill && nogginCenter < sill + h) {
+             for (const op of openings) {
+                if (midX > op.startX && midX < op.startX + op.width) {
+                    if (nogginCenter > op.sillHeight && nogginCenter < op.sillHeight + op.height) {
                         insideOpening = true;
                         break;
                     }
@@ -241,37 +237,18 @@ const generateSingleWallFrame = (wall, materialsList) => {
 
         // --- BRACING ---
         if (showBracing) {
-           const solidPanels = [];
-           let currentStart = 0;
-           const allOps = [...openings].sort((a,b) => (parseFloat(a.startX)||0) - (parseFloat(b.startX)||0));
-           
-           allOps.forEach(op => {
-               const opStart = parseFloat(op.startX);
-               const opWidth = parseFloat(op.width);
-               if (opStart > currentStart) solidPanels.push({ start: currentStart, end: opStart });
-               currentStart = Math.max(currentStart, opStart + opWidth);
-           });
-           if (currentStart < numLen) solidPanels.push({ start: currentStart, end: numLen });
-
-           solidPanels.forEach(panel => {
-               const panelWidth = panel.end - panel.start;
-               if (panelWidth > 1200) {
-                   const padding = 150;
-                   const braceRun = panelWidth - (padding * 2);
-                   if (braceRun > 500) {
-                      const braceRise = numHeight - 200; 
-                      const braceLen = Math.sqrt(Math.pow(braceRun, 2) + Math.pow(braceRise, 2));
-                      const angleRad = Math.atan2(braceRise, braceRun);
-                      const angleDeg = angleRad * (180 / Math.PI);
-                      
-                      // Flip Bracing: If normal (not flipped), sits at depth + 2. If flipped, sits at -2 (Back side).
-                      // Assuming Bracing always follows External side.
-                      const zBrace = !isFlipped ? (depth + 2) : (-2);
-
-                      addMember('Metal Brace', panel.start + padding, 100, zBrace, braceLen, 40, 2, COL_BRACE, angleDeg);
-                   }
-               }
-           });
+           const frameLen = numLen - (trimStart + trimEnd);
+           if (frameLen > 1800) {
+               const braceRun = Math.min(frameLen - 200, 2400); 
+               const startX = frameStart + (frameLen - braceRun)/2;
+               const braceRise = numHeight - 200;
+               const braceLen = Math.sqrt(braceRun*braceRun + braceRise*braceRise);
+               const angleRad = Math.atan2(braceRise, braceRun);
+               const angleDeg = angleRad * (180 / Math.PI);
+               
+               const zBrace = !isFlipped ? (depth + 2) : (-2);
+               addMember('Metal Brace', startX, 100, zBrace, braceLen, 40, 2, COL_BRACE, angleDeg);
+           }
         }
 
         return components;
@@ -281,16 +258,11 @@ const generateSingleWallFrame = (wall, materialsList) => {
     }
 };
 
-
 const AS1684WallGenerator = () => {
   // --- STATE ---
   const [materials, setMaterials] = useState(DEFAULT_MATERIALS);
   const [walls, setWalls] = useState([
-    { 
-        id: 1, name: 'Wall 1', length: 3000, height: 2400, studSize: '90x45', studSpacing: 450, 
-        openings: [], position: { x: 0, y: 0, rotation: 0 }, showBracing: true,
-        internalLining: 'gyprock_10', externalLining: 'brick_veneer', isFlipped: false
-    }
+    { id: 1, name: 'Wall 1', length: 3000, height: 2400, studSize: '90x45', studSpacing: 450, openings: [], position: { x: 0, y: 0, rotation: 0 }, showBracing: true, internalLining: 'gyprock_10', externalLining: 'brick_veneer', isFlipped: false }
   ]);
   const [selectedWallId, setSelectedWallId] = useState(1);
   const [view3D, setView3D] = useState(DEFAULT_VIEW);
@@ -317,10 +289,9 @@ const AS1684WallGenerator = () => {
   const canvasRef = useRef(null);
   const planCanvasRef = useRef(null);
 
-  // Helper to get active wall
   const activeWall = walls.find(w => w.id === selectedWallId) || walls[0];
 
-  // Helper to update active wall
+  // --- HELPERS ---
   const updateActiveWall = (field, value) => {
     setWalls(prev => prev.map(w => w.id === selectedWallId ? { ...w, [field]: value } : w));
   };
@@ -333,21 +304,7 @@ const AS1684WallGenerator = () => {
     const newId = Date.now();
     const lastWall = walls[walls.length-1];
     const newPos = lastWall ? { x: lastWall.position.x + 1000, y: lastWall.position.y, rotation: 0 } : { x:0, y:0, rotation:0 };
-    
-    setWalls([...walls, { 
-      id: newId, 
-      name: `Wall ${walls.length + 1}`, 
-      length: 3000, 
-      height: 2400, 
-      studSize: '90x45', 
-      studSpacing: 450, 
-      openings: [], 
-      position: newPos,
-      showBracing: true,
-      internalLining: 'gyprock_10',
-      externalLining: 'brick_veneer',
-      isFlipped: false
-    }]);
+    setWalls([...walls, { id: newId, name: `Wall ${walls.length + 1}`, length: 3000, height: 2400, studSize: '90x45', studSpacing: 450, openings: [], position: newPos, showBracing: true, internalLining: 'gyprock_10', externalLining: 'brick_veneer', isFlipped: false }]);
     setSelectedWallId(newId);
     setActiveTab('editor');
   };
@@ -358,23 +315,139 @@ const AS1684WallGenerator = () => {
       setNewMat({ name: 'New Material', thickness: 10, cavity: 0, color: '#ffffff', opacity: 0.5, type: 'external' });
   };
 
-  // --- KEYBOARD HANDLERS ---
+  // --- JUNCTION SOLVER (Auto-Join Logic) ---
+  const solvedWalls = useMemo(() => {
+      // Clone walls to avoid mutation and reset solve state
+      const result = walls.map(w => ({...w, trimStart: 0, trimEnd: 0, cornerTypeStart: null, cornerTypeEnd: null }));
+      
+      const SNAP_DIST = 150;
+
+      for (let i = 0; i < result.length; i++) {
+          for (let j = 0; j < result.length; j++) {
+              if (i === j) continue;
+              
+              const w1 = result[i];
+              const w2 = result[j];
+              
+              const r1 = w1.position.rotation * (Math.PI/180);
+              const w1Start = w1.position;
+              const w1End = { x: w1Start.x + Math.cos(r1)*w1.length, y: w1Start.y + Math.sin(r1)*w1.length };
+              
+              const r2 = w2.position.rotation * (Math.PI/180);
+              const w2Start = w2.position;
+              const w2End = { x: w2Start.x + Math.cos(r2)*w2.length, y: w2Start.y + Math.sin(r2)*w2.length };
+
+              const { d: depth2 } = TIMBER_SIZES[w2.studSize] || TIMBER_SIZES['90x45'];
+
+              if (dist(w1Start, w2End) < SNAP_DIST) {
+                  w1.trimStart = depth2;
+                  w2.cornerTypeEnd = 'through';
+              }
+              else if (dist(w1End, w2Start) < SNAP_DIST) {
+                  w1.trimEnd = depth2;
+                  w2.cornerTypeStart = 'through';
+              }
+              else if (dist(w1Start, w2Start) < SNAP_DIST) {
+                  w1.trimStart = depth2;
+                  w2.cornerTypeStart = 'through';
+              }
+              else if (dist(w1End, w2End) < SNAP_DIST) {
+                  w1.trimEnd = depth2;
+                  w2.cornerTypeEnd = 'through';
+              }
+          }
+      }
+      return result;
+  }, [walls]);
+
+  // --- HOUSE GENERATION ---
+  const houseGeometry = useMemo(() => {
+    let allComponents = [];
+    solvedWalls.forEach(wall => {
+      const localParts = generateSingleWallFrame(wall, materials, wall.trimStart, wall.trimEnd, wall.cornerTypeStart, wall.cornerTypeEnd);
+      const { x: wx, y: wy, rotation: wRot } = wall.position;
+      const transformed = localParts.map(part => {
+        return {
+          ...part,
+          wallId: wall.id,
+          worldTransform: { x: wx, z: wy, rotation: wRot }
+        };
+      });
+      allComponents = [...allComponents, ...transformed];
+    });
+    return allComponents;
+  }, [solvedWalls, materials]);
+
+  // --- BOM ENGINE ---
+  const globalBOM = useMemo(() => {
+    const rawGroups = {};
+    const liningGroups = {};
+
+    // 1. Structural BOM
+    houseGeometry.forEach(item => {
+      if (item.type.includes('Lining')) return;
+      const sizeKey = item.sectionSize || "Misc";
+      if (!rawGroups[sizeKey]) rawGroups[sizeKey] = { pieces: [], cutList: {}, totalLM: 0 };
+      rawGroups[sizeKey].pieces.push(item.cutLength);
+      const itemKey = `${item.type} @ ${item.cutLength}mm`;
+      if (!rawGroups[sizeKey].cutList[itemKey]) rawGroups[sizeKey].cutList[itemKey] = { type: item.type, len: item.cutLength, count: 0 };
+      rawGroups[sizeKey].cutList[itemKey].count++;
+      rawGroups[sizeKey].totalLM += item.cutLength;
+    });
+    walls.forEach(w => {
+        let area = (w.length * w.height) / 1000000; 
+        w.openings.forEach(op => { area -= (op.width * op.height) / 1000000; });
+        if (w.internalLining && w.internalLining !== 'none') {
+            const mat = materials.find(m => m.id === w.internalLining);
+            if (mat) {
+                const key = mat.name;
+                if (!liningGroups[key]) liningGroups[key] = 0;
+                liningGroups[key] += area;
+            }
+        }
+        if (w.externalLining && w.externalLining !== 'none') {
+            const mat = materials.find(m => m.id === w.externalLining);
+            if (mat) {
+                const key = mat.name;
+                if (!liningGroups[key]) liningGroups[key] = 0;
+                liningGroups[key] += area;
+            }
+        }
+    });
+    Object.keys(rawGroups).forEach(sizeKey => {
+      if (sizeKey === 'Metal Strap' || sizeKey === 'Misc') return;
+      const pieces = [...rawGroups[sizeKey].pieces].sort((a, b) => b - a);
+      const bins = [];
+      pieces.forEach(piece => {
+        let fitted = false;
+        for (let bin of bins) {
+          if (bin.remaining >= piece + 5) { bin.remaining -= (piece + 5); bin.cuts.push(piece); fitted = true; break; }
+        }
+        if (!fitted) {
+          const bestStock = COMMON_ORDER_LENGTHS.find(l => l >= piece);
+          if (bestStock) { bins.push({ length: bestStock, remaining: bestStock - piece - 5, cuts: [piece] }); } 
+          else { bins.push({ length: Math.ceil(piece / 600) * 600, remaining: 0, cuts: [piece] }); }
+        }
+      });
+      const orderSummary = {};
+      bins.forEach(bin => { if (!orderSummary[bin.length]) orderSummary[bin.length] = 0; orderSummary[bin.length]++; });
+      rawGroups[sizeKey].orderList = orderSummary;
+    });
+    return { structural: rawGroups, linings: liningGroups };
+  }, [houseGeometry, walls, materials]);
+
+  // --- INPUT HANDLERS ---
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
-        if (drawState.active) {
-          setDrawState({ active: false, start: null, current: null, snapped: null });
-        }
-        if (dragHandle) {
-            setDragHandle(null);
-        }
+        if (drawState.active) setDrawState({ active: false, start: null, current: null, snapped: null });
+        if (dragHandle) setDragHandle(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [drawState.active, dragHandle]);
 
-  // --- PLAN VIEW LOGIC ---
   const getPlanCoordinates = (e) => {
     if (!planCanvasRef.current) return { x: 0, y: 0 };
     const rect = planCanvasRef.current.getBoundingClientRect();
@@ -392,7 +465,6 @@ const AS1684WallGenerator = () => {
     let snapY = Math.round(my / 100) * 100;
     let isSnapToWall = false;
     const snapRadius = 25 / planView.zoom; 
-
     walls.forEach(w => {
       if (w.id === excludeWallId) return;
       const startX = w.position.x;
@@ -400,15 +472,9 @@ const AS1684WallGenerator = () => {
       const rad = w.position.rotation * (Math.PI/180);
       const endX = startX + Math.cos(rad) * w.length;
       const endY = startY + Math.sin(rad) * w.length;
-      
-      if (dist({x:mx, y:my}, {x:startX, y:startY}) < snapRadius) { 
-          snapX = startX; snapY = startY; isSnapToWall = true;
-      }
-      if (dist({x:mx, y:my}, {x:endX, y:endY}) < snapRadius) { 
-          snapX = endX; snapY = endY; isSnapToWall = true;
-      }
+      if (dist({x:mx, y:my}, {x:startX, y:startY}) < snapRadius) { snapX = startX; snapY = startY; isSnapToWall = true; }
+      if (dist({x:mx, y:my}, {x:endX, y:endY}) < snapRadius) { snapX = endX; snapY = endY; isSnapToWall = true; }
     });
-
     return { x: snapX, y: snapY, isSnapToWall };
   };
 
@@ -422,20 +488,14 @@ const AS1684WallGenerator = () => {
           if (dist({x:mx, y:my}, p1) < handleRadius) found = { wallId: w.id, type: 'start' };
           else if (dist({x:mx, y:my}, p2) < handleRadius) found = { wallId: w.id, type: 'end' };
       });
-      if (found?.wallId !== hoverHandle?.wallId || found?.type !== hoverHandle?.type) {
-          setHoverHandle(found);
-      }
+      if (found?.wallId !== hoverHandle?.wallId || found?.type !== hoverHandle?.type) setHoverHandle(found);
       return found;
   };
 
   const handlePlanMouseDown = (e) => {
     const { x: mx, y: my } = getPlanCoordinates(e);
     const clickedHandle = checkHoverHandle(mx, my);
-    if (clickedHandle && !drawState.active) {
-        setDragHandle(clickedHandle);
-        setSelectedWallId(clickedHandle.wallId);
-        return;
-    }
+    if (clickedHandle && !drawState.active) { setDragHandle(clickedHandle); setSelectedWallId(clickedHandle.wallId); return; }
     if (activeTab === 'walls' && drawState.active) {
         const snapped = getSnappedPosition(mx, my);
         const finalX = snapped.x;
@@ -452,18 +512,9 @@ const AS1684WallGenerator = () => {
                 const rot = Math.atan2(dy, dx) * (180/Math.PI);
                 const newId = Date.now();
                 setWalls([...walls, {
-                    id: newId,
-                    name: `Wall ${walls.length + 1}`,
-                    length: Math.round(len),
-                    height: 2400,
-                    studSize: '90x45',
-                    studSpacing: 450,
-                    openings: [],
-                    position: { x: p1.x, y: p1.y, rotation: Math.round(rot) },
-                    showBracing: true,
-                    internalLining: 'gyprock_10',
-                    externalLining: 'brick_veneer',
-                    isFlipped: false
+                    id: newId, name: `Wall ${walls.length + 1}`, length: Math.round(len), height: 2400, studSize: '90x45', studSpacing: 450, 
+                    openings: [], position: { x: p1.x, y: p1.y, rotation: Math.round(rot) }, showBracing: true,
+                    internalLining: 'gyprock_10', externalLining: 'brick_veneer', isFlipped: false
                 }]);
                 setSelectedWallId(newId);
                 setDrawState({ ...drawState, start: p2, current: p2, snapped: snapped.isSnapToWall });
@@ -488,8 +539,7 @@ const AS1684WallGenerator = () => {
                  const refPoint = dragHandle.type === 'start' ? pEnd : pStart;
                  const dx = Math.abs(target.x - refPoint.x);
                  const dy = Math.abs(target.y - refPoint.y);
-                 if (dx > dy) target.y = refPoint.y; 
-                 else target.x = refPoint.x;
+                 if (dx > dy) target.y = refPoint.y; else target.x = refPoint.x;
              }
           }
           setWalls(prev => prev.map(w => {
@@ -523,8 +573,7 @@ const AS1684WallGenerator = () => {
             if (e.shiftKey) {
                 const dx = Math.abs(targetX - drawState.start.x);
                 const dy = Math.abs(targetY - drawState.start.y);
-                if (dx > dy) targetY = drawState.start.y;
-                else targetX = drawState.start.x;
+                if (dx > dy) targetY = drawState.start.y; else targetX = drawState.start.x;
             } else {
                 if (Math.abs(targetX - drawState.start.x) < (300/planView.zoom)) targetX = drawState.start.x;
                 if (Math.abs(targetY - drawState.start.y) < (300/planView.zoom)) targetY = drawState.start.y;
@@ -552,102 +601,108 @@ const AS1684WallGenerator = () => {
       setPlanView(prev => ({ ...prev, zoom: Math.max(0.1, Math.min(5, prev.zoom * delta)) }));
   };
 
-  // --- HOUSE GENERATION ---
-  const houseGeometry = useMemo(() => {
-    let allComponents = [];
-    walls.forEach(wall => {
-      const localParts = generateSingleWallFrame(wall, materials);
-      const { x: wx, y: wy, rotation: wRot } = wall.position;
-      const transformed = localParts.map(part => {
-        return {
-          ...part,
-          wallId: wall.id,
-          worldTransform: { x: wx, z: wy, rotation: wRot }
-        };
+  // --- RENDER PLAN LOOP ---
+  useEffect(() => {
+      if (viewMode !== 'plan') return;
+      const canvas = planCanvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const width = canvas.width;
+      const height = canvas.height;
+
+      ctx.fillStyle = '#1e293b'; 
+      ctx.fillRect(0, 0, width, height);
+      
+      const cx = width/2 + planView.x;
+      const cy = height/2 + planView.y;
+      
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1;
+      const gridSize = 1000 * planView.zoom;
+      const startX = cx % gridSize;
+      const startY = cy % gridSize;
+      
+      ctx.beginPath();
+      for (let x = startX; x < width; x += gridSize) { ctx.moveTo(x, 0); ctx.lineTo(x, height); }
+      for (let y = startY; y < height; y += gridSize) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
+      ctx.stroke();
+
+      // Draw Solved Walls
+      solvedWalls.forEach(w => {
+          const startX = cx + (w.position.x * planView.zoom);
+          const startY = cy + (w.position.y * planView.zoom);
+          const rad = w.position.rotation * (Math.PI / 180);
+          const endX = startX + (Math.cos(rad) * w.length * planView.zoom);
+          const endY = startY + (Math.sin(rad) * w.length * planView.zoom);
+          
+          const isSel = w.id === selectedWallId;
+          const isHover = hoverHandle && hoverHandle.wallId === w.id;
+          const { d: studDepth } = TIMBER_SIZES[w.studSize] || TIMBER_SIZES['90x45'];
+          const intMat = materials.find(m => m.id === w.internalLining) || DEFAULT_MATERIALS[0];
+          const extMat = materials.find(m => m.id === w.externalLining) || DEFAULT_MATERIALS[0];
+
+          const dx = endX - startX; const dy = endY - startY;
+          const len = Math.sqrt(dx*dx + dy*dy);
+          const nx = -dy / len; const ny = dx / len;
+          const dirInt = w.isFlipped ? 1 : -1; const dirExt = w.isFlipped ? -1 : 1;
+          
+          const trimStartPx = w.trimStart * planView.zoom;
+          const trimEndPx = w.trimEnd * planView.zoom;
+          const fx = dx/len; const fy = dy/len;
+          const fsx = startX + fx * trimStartPx;
+          const fsy = startY + fy * trimStartPx;
+          const fex = endX - fx * trimEndPx;
+          const fey = endY - fy * trimEndPx;
+
+          ctx.strokeStyle = isSel ? '#8B5A2B' : '#5D4037';
+          ctx.lineWidth = studDepth * planView.zoom;
+          ctx.lineCap = 'butt';
+          ctx.beginPath(); ctx.moveTo(fsx, fsy); ctx.lineTo(fex, fey); ctx.stroke();
+
+          if (intMat.thickness > 0) {
+              const dist = (studDepth/2 + intMat.cavity + intMat.thickness/2) * planView.zoom * dirInt;
+              ctx.beginPath(); ctx.moveTo(startX+nx*dist, startY+ny*dist); ctx.lineTo(endX+nx*dist, endY+ny*dist);
+              ctx.lineWidth = intMat.thickness * planView.zoom; ctx.strokeStyle = intMat.color; ctx.stroke();
+          }
+          if (extMat.thickness > 0) {
+              const dist = (studDepth/2 + extMat.cavity + extMat.thickness/2) * planView.zoom * dirExt;
+              ctx.beginPath(); ctx.moveTo(startX+nx*dist, startY+ny*dist); ctx.lineTo(endX+nx*dist, endY+ny*dist);
+              ctx.lineWidth = extMat.thickness * planView.zoom; ctx.strokeStyle = extMat.color; ctx.stroke();
+          }
+          
+          const handleSize = 5;
+          ctx.fillStyle = (isHover && hoverHandle.type === 'start') ? '#22c55e' : '#fff';
+          ctx.beginPath(); ctx.arc(startX, startY, handleSize, 0, Math.PI*2); ctx.fill();
+          ctx.fillStyle = (isHover && hoverHandle.type === 'end') ? '#22c55e' : '#fff';
+          ctx.beginPath(); ctx.arc(endX, endY, handleSize, 0, Math.PI*2); ctx.fill();
       });
-      allComponents = [...allComponents, ...transformed];
-    });
-    return allComponents;
-  }, [walls, materials]);
 
-  // --- BOM ENGINE ---
-  const globalBOM = useMemo(() => {
-    const rawGroups = {};
-    const liningGroups = {};
+      if (drawState.active) {
+          const cursorPos = drawState.current || { x: 0, y: 0 };
+          const sx = cx + (cursorPos.x * planView.zoom);
+          const sy = cy + (cursorPos.y * planView.zoom);
 
-    // 1. Structural BOM
-    houseGeometry.forEach(item => {
-      if (item.type.includes('Lining')) return;
+          ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1;
+          const crossSize = 10;
+          ctx.beginPath(); ctx.moveTo(sx - crossSize, sy); ctx.lineTo(sx + crossSize, sy); ctx.moveTo(sx, sy - crossSize); ctx.lineTo(sx, sy + crossSize); ctx.stroke();
 
-      const sizeKey = item.sectionSize || "Misc";
-      if (!rawGroups[sizeKey]) rawGroups[sizeKey] = { pieces: [], cutList: {}, totalLM: 0 };
-      rawGroups[sizeKey].pieces.push(item.cutLength);
-      const itemKey = `${item.type} @ ${item.cutLength}mm`;
-      if (!rawGroups[sizeKey].cutList[itemKey]) {
-        rawGroups[sizeKey].cutList[itemKey] = { type: item.type, len: item.cutLength, count: 0 };
+          if (drawState.snapped) {
+              ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2;
+              ctx.beginPath(); ctx.arc(sx, sy, 8, 0, Math.PI*2); ctx.stroke();
+          }
+          if (drawState.start) {
+              const startScreenX = cx + (drawState.start.x * planView.zoom);
+              const startScreenY = cy + (drawState.start.y * planView.zoom);
+              ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 90 * planView.zoom; ctx.globalAlpha = 0.5;
+              ctx.beginPath(); ctx.moveTo(startScreenX, startScreenY); ctx.lineTo(sx, sy); ctx.stroke(); ctx.globalAlpha = 1.0;
+              
+              const d = dist(drawState.start, cursorPos);
+              ctx.fillStyle = '#fff'; ctx.font = '12px monospace'; ctx.fillText(`${Math.round(d)}mm`, (startScreenX+sx)/2, (startScreenY+sy)/2 - 10);
+          }
       }
-      rawGroups[sizeKey].cutList[itemKey].count++;
-      rawGroups[sizeKey].totalLM += item.cutLength;
-    });
+  }, [solvedWalls, viewMode, planView, selectedWallId, drawState, hoverHandle, materials]);
 
-    // 2. Lining BOM
-    walls.forEach(w => {
-        let area = (w.length * w.height) / 1000000; 
-        w.openings.forEach(op => {
-            area -= (op.width * op.height) / 1000000;
-        });
-        if (w.internalLining && w.internalLining !== 'none') {
-            const mat = materials.find(m => m.id === w.internalLining);
-            if (mat) {
-                const key = mat.name;
-                if (!liningGroups[key]) liningGroups[key] = 0;
-                liningGroups[key] += area;
-            }
-        }
-        if (w.externalLining && w.externalLining !== 'none') {
-            const mat = materials.find(m => m.id === w.externalLining);
-            if (mat) {
-                const key = mat.name;
-                if (!liningGroups[key]) liningGroups[key] = 0;
-                liningGroups[key] += area;
-            }
-        }
-    });
-
-    Object.keys(rawGroups).forEach(sizeKey => {
-      if (sizeKey === 'Metal Strap' || sizeKey === 'Misc') return;
-      const pieces = [...rawGroups[sizeKey].pieces].sort((a, b) => b - a);
-      const bins = [];
-      pieces.forEach(piece => {
-        let fitted = false;
-        for (let bin of bins) {
-          if (bin.remaining >= piece + 5) {
-            bin.remaining -= (piece + 5);
-            bin.cuts.push(piece);
-            fitted = true;
-            break;
-          }
-        }
-        if (!fitted) {
-          const bestStock = COMMON_ORDER_LENGTHS.find(l => l >= piece);
-          if (bestStock) {
-            bins.push({ length: bestStock, remaining: bestStock - piece - 5, cuts: [piece] });
-          } else {
-            bins.push({ length: Math.ceil(piece / 600) * 600, remaining: 0, cuts: [piece] });
-          }
-        }
-      });
-      const orderSummary = {};
-      bins.forEach(bin => {
-        if (!orderSummary[bin.length]) orderSummary[bin.length] = 0;
-        orderSummary[bin.length]++;
-      });
-      rawGroups[sizeKey].orderList = orderSummary;
-    });
-    return { structural: rawGroups, linings: liningGroups };
-  }, [houseGeometry, walls, materials]);
-
-  // --- RENDER 3D LOOP ---
+  // --- RENDER 3D ---
   useEffect(() => {
     if (viewMode !== '3d') return;
     const canvas = canvasRef.current;
@@ -662,314 +717,69 @@ const AS1684WallGenerator = () => {
     if (houseGeometry.length === 0) return;
 
     const scale = view3D.zoom;
-    
     const project = (x, y, z) => {
-      let dx = x;
-      let dy = y; 
-      let dz = z;
-
-      const radY = view3D.rotY * (Math.PI / 180);
-      const radX = view3D.rotX * (Math.PI / 180);
-
+      let dx = x; let dy = y; let dz = z;
+      const radY = view3D.rotY * (Math.PI / 180); const radX = view3D.rotX * (Math.PI / 180);
       let x1 = dx * Math.cos(radY) - dz * Math.sin(radY);
       let z1 = dx * Math.sin(radY) + dz * Math.cos(radY);
-
       let y2 = dy * Math.cos(radX) - z1 * Math.sin(radX);
       let z2 = dy * Math.sin(radX) + z1 * Math.cos(radX);
-
       const dist = 4000 + z2; 
-      
-      let f;
-      if (projectionMode === 'orthographic') {
-          f = 1; 
-      } else {
-          f = 4000 / (dist < 100 ? 100 : dist); 
-      }
-      
-      return {
-        x: (width / 2) + (x1 * f) * scale + view3D.panX,
-        y: (height / 2) - (y2 * f) * scale + view3D.panY,
-        z: z2 
-      };
+      let f = projectionMode === 'orthographic' ? 1 : 4000 / (dist < 100 ? 100 : dist); 
+      return { x: (width / 2) + (x1 * f) * scale + view3D.panX, y: (height / 2) - (y2 * f) * scale + view3D.panY, z: z2 };
     };
 
     let allFaces = [];
-
     houseGeometry.forEach(comp => {
       const { x, y, z, len, w, d, color, rotation, worldTransform, wallId, opacity } = comp;
       const isSelected = wallId === selectedWallId;
       const baseColor = isSelected ? color : adjustColor(color, -60); 
-
-      const rawVerts = [
-        {x: 0, y: 0, z: 0}, {x: len, y: 0, z: 0}, {x: len, y: w, z: 0}, {x: 0, y: w, z: 0},
-        {x: 0, y: 0, z: d}, {x: len, y: 0, z: d}, {x: len, y: w, z: d}, {x: 0, y: w, z: d}
-      ];
-
+      const rawVerts = [{x:0,y:0,z:0}, {x:len,y:0,z:0}, {x:len,y:w,z:0}, {x:0,y:w,z:0}, {x:0,y:0,z:d}, {x:len,y:0,z:d}, {x:len,y:w,z:d}, {x:0,y:w,z:d}];
       const worldVerts = rawVerts.map(v => {
           const localRot = rotatePoint(v.x, v.y, rotation);
-          const lx = x + localRot.x;
-          const ly = y + localRot.y;
-          const lz = z + v.z;
-
+          const lx = x + localRot.x; const ly = y + localRot.y; const lz = z + v.z;
           const wRad = (worldTransform.rotation || 0) * (Math.PI / 180);
           const wx_rot = lx * Math.cos(wRad) - lz * Math.sin(wRad);
           const wz_rot = lx * Math.sin(wRad) + lz * Math.cos(wRad);
-
           return { x: wx_rot + worldTransform.x, y: ly, z: wz_rot + worldTransform.z };
       });
-
       const p = worldVerts.map(pt => project(pt.x, pt.y, pt.z));
-
-      const faces = [
-        { v: [0, 1, 2, 3], c: baseColor }, 
-        { v: [5, 4, 7, 6], c: adjustColor(baseColor, -60) }, 
-        { v: [4, 0, 3, 7], c: adjustColor(baseColor, -30) }, 
-        { v: [1, 5, 6, 2], c: adjustColor(baseColor, -30) }, 
-        { v: [3, 2, 6, 7], c: adjustColor(baseColor, 40) }, 
-        { v: [4, 5, 1, 0], c: adjustColor(baseColor, -50) } 
-      ];
-
+      const faces = [{ v: [0, 1, 2, 3], c: baseColor }, { v: [5, 4, 7, 6], c: adjustColor(baseColor, -60) }, { v: [4, 0, 3, 7], c: adjustColor(baseColor, -30) }, { v: [1, 5, 6, 2], c: adjustColor(baseColor, -30) }, { v: [3, 2, 6, 7], c: adjustColor(baseColor, 40) }, { v: [4, 5, 1, 0], c: adjustColor(baseColor, -50) }];
       faces.forEach(face => {
         const minZ = Math.min(p[face.v[0]].z, p[face.v[1]].z, p[face.v[2]].z, p[face.v[3]].z);
         allFaces.push({ pts: face.v.map(i => p[i]), z: minZ, color: face.c, opacity: opacity || 1.0 });
       });
     });
-
     allFaces.sort((a, b) => b.z - a.z);
-
     allFaces.forEach(f => {
-      ctx.beginPath();
-      ctx.moveTo(f.pts[0].x, f.pts[0].y);
-      ctx.lineTo(f.pts[1].x, f.pts[1].y);
-      ctx.lineTo(f.pts[2].x, f.pts[2].y);
-      ctx.lineTo(f.pts[3].x, f.pts[3].y);
-      ctx.closePath();
-      
-      ctx.globalAlpha = f.opacity;
-      ctx.fillStyle = f.color;
-      ctx.fill();
-      
-      ctx.strokeStyle = '#00000099';
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-      ctx.globalAlpha = 1.0;
+      ctx.beginPath(); ctx.moveTo(f.pts[0].x, f.pts[0].y); ctx.lineTo(f.pts[1].x, f.pts[1].y); ctx.lineTo(f.pts[2].x, f.pts[2].y); ctx.lineTo(f.pts[3].x, f.pts[3].y); ctx.closePath();
+      ctx.globalAlpha = f.opacity; ctx.fillStyle = f.color; ctx.fill();
+      ctx.strokeStyle = '#00000099'; ctx.lineWidth = 0.8; ctx.stroke(); ctx.globalAlpha = 1.0;
     });
-
   }, [houseGeometry, view3D, selectedWallId, projectionMode, viewMode]);
 
-  // --- RENDER PLAN LOOP ---
-  useEffect(() => {
-      if (viewMode !== 'plan') return;
-      const canvas = planCanvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      const width = canvas.width;
-      const height = canvas.height;
-
-      // Background Grid
-      ctx.fillStyle = '#1e293b'; // Slate 800
-      ctx.fillRect(0, 0, width, height);
-      
-      const cx = width/2 + planView.x;
-      const cy = height/2 + planView.y;
-      
-      // Draw Grid Lines (1m spacing)
-      ctx.strokeStyle = '#334155';
-      ctx.lineWidth = 1;
-      const gridSize = 1000 * planView.zoom;
-      const startX = cx % gridSize;
-      const startY = cy % gridSize;
-      
-      ctx.beginPath();
-      for (let x = startX; x < width; x += gridSize) { ctx.moveTo(x, 0); ctx.lineTo(x, height); }
-      for (let y = startY; y < height; y += gridSize) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
-      ctx.stroke();
-
-      // Draw Walls
-      walls.forEach(w => {
-          const startX = cx + (w.position.x * planView.zoom);
-          const startY = cy + (w.position.y * planView.zoom);
-          const rad = w.position.rotation * (Math.PI / 180);
-          const endX = startX + (Math.cos(rad) * w.length * planView.zoom);
-          const endY = startY + (Math.sin(rad) * w.length * planView.zoom);
-          
-          const isSel = w.id === selectedWallId;
-          const isHover = hoverHandle && hoverHandle.wallId === w.id;
-
-          // Get Dimensions
-          const { d: studDepth } = TIMBER_SIZES[w.studSize] || TIMBER_SIZES['90x45'];
-          const intMat = materials.find(m => m.id === w.internalLining) || DEFAULT_MATERIALS[0];
-          const extMat = materials.find(m => m.id === w.externalLining) || DEFAULT_MATERIALS[0];
-
-          // Helper Vector Math
-          const dx = endX - startX;
-          const dy = endY - startY;
-          const len = Math.sqrt(dx*dx + dy*dy);
-          const nx = -dy / len; // Normal X
-          const ny = dx / len;  // Normal Y
-
-          // --- DRAW LAYERS ---
-          
-          // FLIP LOGIC
-          // If flipped: Internal uses +Normal, External uses -Normal
-          // Default: Internal uses -Normal, External uses +Normal
-          const dirInt = w.isFlipped ? 1 : -1;
-          const dirExt = w.isFlipped ? -1 : 1;
-
-          // 1. Frame (Core)
-          ctx.strokeStyle = isSel ? '#8B5A2B' : '#5D4037'; // Brown for timber
-          ctx.lineWidth = studDepth * planView.zoom;
-          ctx.lineCap = 'butt';
-          ctx.beginPath();
-          ctx.moveTo(startX, startY);
-          ctx.lineTo(endX, endY);
-          ctx.stroke();
-
-          // 2. Internal Lining
-          if (intMat.thickness > 0) {
-              const dist = (studDepth/2 + intMat.cavity + intMat.thickness/2) * planView.zoom * dirInt;
-              const isx = startX + nx * dist;
-              const isy = startY + ny * dist;
-              const iex = endX + nx * dist;
-              const iey = endY + ny * dist;
-              
-              ctx.beginPath();
-              ctx.moveTo(isx, isy);
-              ctx.lineTo(iex, iey);
-              ctx.lineWidth = intMat.thickness * planView.zoom;
-              ctx.strokeStyle = intMat.color;
-              ctx.stroke();
-          }
-
-          // 3. External Lining
-          if (extMat.thickness > 0) {
-              const dist = (studDepth/2 + extMat.cavity + extMat.thickness/2) * planView.zoom * dirExt;
-              const esx = startX + nx * dist;
-              const esy = startY + ny * dist;
-              const eex = endX + nx * dist;
-              const eey = endY + ny * dist;
-              
-              ctx.beginPath();
-              ctx.moveTo(esx, esy);
-              ctx.lineTo(eex, eey);
-              ctx.lineWidth = extMat.thickness * planView.zoom;
-              ctx.strokeStyle = extMat.color;
-              ctx.stroke();
-          }
-
-          // Centerline (White overlay)
-          if (isSel) {
-              ctx.strokeStyle = '#ffffff';
-              ctx.lineWidth = 1;
-              ctx.setLineDash([5, 5]);
-              ctx.beginPath();
-              ctx.moveTo(startX, startY);
-              ctx.lineTo(endX, endY);
-              ctx.stroke();
-              ctx.setLineDash([]);
-          }
-
-          // Endpoints (Interactive)
-          const handleSize = 5;
-          ctx.fillStyle = (isHover && hoverHandle.type === 'start') ? '#22c55e' : '#fff';
-          ctx.beginPath(); ctx.arc(startX, startY, handleSize, 0, Math.PI*2); ctx.fill();
-          
-          ctx.fillStyle = (isHover && hoverHandle.type === 'end') ? '#22c55e' : '#fff';
-          ctx.beginPath(); ctx.arc(endX, endY, handleSize, 0, Math.PI*2); ctx.fill();
-      });
-
-      // Draw Active Temp Wall
-      if (drawState.active) {
-          const cursorPos = drawState.current || { x: 0, y: 0 };
-          const sx = cx + (cursorPos.x * planView.zoom); // Snap target X screen
-          const sy = cy + (cursorPos.y * planView.zoom); // Snap target Y screen
-
-          // --- VISUAL FEEDBACK: CURSOR & SNAP TARGET ---
-          
-          // 1. Draw Raw Input Cursor (Blue Crosshair) to show where mouse actually is
-          ctx.strokeStyle = '#3b82f6'; // Blue
-          ctx.lineWidth = 1;
-          const crossSize = 10;
-          ctx.beginPath();
-          ctx.moveTo(sx - crossSize, sy); ctx.lineTo(sx + crossSize, sy);
-          ctx.moveTo(sx, sy - crossSize); ctx.lineTo(sx, sy + crossSize);
-          ctx.stroke();
-
-          // 2. Draw Snap Target (Red Circle) ONLY if actually snapped
-          if (drawState.snapped) {
-              ctx.strokeStyle = '#ef4444'; // Red
-              ctx.lineWidth = 2;
-              ctx.beginPath(); 
-              ctx.arc(sx, sy, 8, 0, Math.PI*2); 
-              ctx.stroke();
-              
-              ctx.fillStyle = '#ef4444';
-              ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI*2); ctx.fill();
-          }
-
-          if (drawState.start) {
-              const startScreenX = cx + (drawState.start.x * planView.zoom);
-              const startScreenY = cy + (drawState.start.y * planView.zoom);
-              
-              ctx.strokeStyle = '#22c55e'; // Green drag line
-              ctx.lineWidth = 90 * planView.zoom; // Show actual thickness preview
-              ctx.globalAlpha = 0.5; // Transparent preview
-              ctx.beginPath();
-              ctx.moveTo(startScreenX, startScreenY);
-              ctx.lineTo(sx, sy);
-              ctx.stroke();
-              ctx.globalAlpha = 1.0;
-              
-              // Center line
-              ctx.strokeStyle = '#fff';
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              ctx.moveTo(startScreenX, startScreenY);
-              ctx.lineTo(sx, sy);
-              ctx.stroke();
-              
-              // Length Label
-              const d = dist(drawState.start, cursorPos);
-              ctx.fillStyle = '#fff';
-              ctx.font = '12px monospace';
-              ctx.fillText(`${Math.round(d)}mm`, (startScreenX+sx)/2, (startScreenY+sy)/2 - 10);
-          }
-      }
-
-  }, [walls, viewMode, planView, selectedWallId, drawState, hoverHandle, materials]);
-
-  // --- HANDLERS ---
+  // --- MOUSE HANDLERS ---
   const handleMouseDown = (e) => {
     if (viewMode === 'plan') { handlePlanMouseDown(e); return; }
-    if (e.shiftKey) setIsPanning(true);
-    else setIsDragging(true);
+    if (e.shiftKey) setIsPanning(true); else setIsDragging(true);
     setDragStart({ x: e.clientX, y: e.clientY });
   };
-
   const handleMouseMove = (e) => {
     if (viewMode === 'plan') { handlePlanMouseMove(e); return; }
     if (!isDragging && !isPanning) return;
-    const dx = e.clientX - dragStart.x;
-    const dy = e.clientY - dragStart.y;
+    const dx = e.clientX - dragStart.x; const dy = e.clientY - dragStart.y;
     setDragStart({ x: e.clientX, y: e.clientY });
     if (isPanning) setView3D(v => ({ ...v, panX: v.panX + dx, panY: v.panY + dy }));
     else setView3D(v => ({ ...v, rotY: v.rotY + dx * 0.5, rotX: Math.max(-90, Math.min(90, v.rotX - dy * 0.5)) }));
   };
-
-  const handleExport = () => {
-    // simplified export trigger
-    alert("Exporting");
-  };
-
-  const toggleWallFlip = () => {
-    updateActiveWall('isFlipped', !activeWall.isFlipped);
-  };
+  const handleExport = () => { alert("Exporting to OBJ..."); };
+  const toggleWallFlip = () => { updateActiveWall('isFlipped', !activeWall.isFlipped); };
 
   return (
     <div className="w-full h-screen bg-gray-950 text-gray-100 flex overflow-hidden font-sans">
-      
       {/* SIDEBAR */}
       <div className={`flex-shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col transition-all ${showSettings ? 'w-80' : 'w-0 overflow-hidden'}`}>
+        {/* Header */}
         <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900">
           <h1 className="font-bold flex items-center gap-2"><Home className="w-5 h-5 text-blue-500" /> House Builder</h1>
           <div className="flex gap-1 bg-gray-800 rounded p-1">
@@ -981,288 +791,123 @@ const AS1684WallGenerator = () => {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
-          
-          {/* --- TAB: WALL LIST --- */}
+          {/* TAB CONTENT: WALLS, EDITOR, MATERIALS, BOM (Same as previous but optimized logic inside) */}
           {activeTab === 'walls' && (
             <div className="space-y-4">
-               
                <div className="bg-gray-800 rounded p-3 border border-gray-700">
                   <h3 className="text-xs font-bold text-gray-400 uppercase mb-2 flex items-center gap-1"><PenTool className="w-3 h-3"/> Tools</h3>
                   <div className="flex gap-2">
-                     <button onClick={() => { setViewMode('plan'); setDrawState(s => ({...s, active: !s.active, start: null})); }} 
-                             className={`flex-1 p-2 rounded text-xs text-center border transition flex items-center justify-center gap-2 ${drawState.active ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-700 border-gray-600 hover:bg-gray-600'}`}>
-                        {drawState.active ? 'Drawing... (Esc to Cancel, Shift for Ortho)' : 'Draw Wall'}
+                     <button onClick={() => { setViewMode('plan'); setDrawState(s => ({...s, active: !s.active, start: null})); }} className={`flex-1 p-2 rounded text-xs text-center border transition flex items-center justify-center gap-2 ${drawState.active ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-700 border-gray-600 hover:bg-gray-600'}`}>
+                        {drawState.active ? 'Drawing... (Esc to Cancel)' : 'Draw Wall'}
                      </button>
                   </div>
-                  <div className="text-[10px] text-gray-500 mt-2">
-                     {drawState.active ? "Click in Plan View to start wall. Click again to finish." : "Switch to Plan View to draw walls easily."}
-                  </div>
-               </div>
-
-               <div className="flex justify-between items-center pt-2 border-t border-gray-800">
-                 <h3 className="text-xs font-bold text-gray-500 uppercase">Wall List</h3>
                </div>
                <div className="space-y-2">
                  {walls.map(w => (
-                   <div key={w.id} 
-                        onClick={() => { setSelectedWallId(w.id); setActiveTab('editor'); }}
-                        className={`p-3 rounded border cursor-pointer transition-all flex justify-between items-center ${selectedWallId === w.id ? 'bg-blue-900/40 border-blue-500 ring-1 ring-blue-500' : 'bg-gray-800 border-gray-700 hover:bg-gray-750'}`}>
-                      <div>
-                        <div className="font-semibold text-sm text-gray-200">{w.name}</div>
-                        <div className="text-[10px] text-gray-400">{w.length}mm</div>
-                      </div>
-                      <div className="text-xs text-gray-500 font-mono bg-gray-900 px-1.5 py-0.5 rounded">
-                        {w.position.rotation}°
-                      </div>
+                   <div key={w.id} onClick={() => { setSelectedWallId(w.id); setActiveTab('editor'); }} className={`p-3 rounded border cursor-pointer flex justify-between ${selectedWallId===w.id?'bg-blue-900/40 border-blue-500':'bg-gray-800 border-gray-700'}`}>
+                      <span className="text-sm font-semibold">{w.name}</span>
+                      <span className="text-xs text-gray-500 bg-gray-900 px-1 rounded">{w.length}mm</span>
                    </div>
                  ))}
                </div>
             </div>
           )}
-
-          {/* --- TAB: EDITOR (Active Wall) --- */}
+          
           {activeTab === 'editor' && (
-            <>
-              <div className="flex justify-between items-center mb-2">
-                 <input className="bg-transparent font-bold border-b border-gray-700 focus:border-blue-500 outline-none w-32 text-gray-200" value={activeWall.name} onChange={e => updateActiveWall('name', e.target.value)} />
-                 <div className="flex gap-2">
-                    <button onClick={toggleWallFlip} className="text-blue-400 hover:text-blue-300 p-1" title="Flip External Side">
-                        <ArrowLeftRight className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => { 
-                        if(walls.length > 1) {
-                            const newWalls = walls.filter(w => w.id !== selectedWallId);
-                            setWalls(newWalls);
-                            setSelectedWallId(newWalls[0].id);
-                        }
-                    }} className="text-red-400 hover:text-red-300 p-1"><Trash2 className="w-4 h-4"/></button>
-                 </div>
-              </div>
-
-              <section className="space-y-3 pt-2 border-t border-gray-800">
-                <h3 className="text-xs font-bold text-blue-400 uppercase">Floor Position</h3>
-                <div className="grid grid-cols-3 gap-2">
-                  <div><label className="text-[10px] text-gray-400">X (mm)</label><input type="text" value={activeWall.position.x} onChange={e => updateActivePosition('x', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded px-1 text-sm text-gray-200"/></div>
-                  <div><label className="text-[10px] text-gray-400">Y (mm)</label><input type="text" value={activeWall.position.y} onChange={e => updateActivePosition('y', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded px-1 text-sm text-gray-200"/></div>
-                  <div><label className="text-[10px] text-gray-400">Angle</label><input type="text" value={activeWall.position.rotation} onChange={e => updateActivePosition('rotation', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded px-1 text-sm text-gray-200"/></div>
-                </div>
-              </section>
-
-              <section className="space-y-3 pt-2 border-t border-gray-800">
-                <h3 className="text-xs font-bold text-gray-500 uppercase">Dimensions</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <div><label className="text-xs text-gray-400">Length</label><input type="text" value={activeWall.length} onChange={e => updateActiveWall('length', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm text-gray-200" /></div>
-                  <div><label className="text-xs text-gray-400">Height</label><input type="text" value={activeWall.height} onChange={e => updateActiveWall('height', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm text-gray-200" /></div>
-                </div>
-              </section>
-
-              <section className="space-y-3">
-                <h3 className="text-xs font-bold text-gray-500 uppercase">Structure</h3>
-                <div className="space-y-2">
-                  <select value={activeWall.studSize} onChange={e => updateActiveWall('studSize', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm text-gray-200">{Object.keys(TIMBER_SIZES).map(s => <option key={s} value={s}>{s}</option>)}</select>
-                  <select value={activeWall.studSpacing} onChange={e => updateActiveWall('studSpacing', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm text-gray-200"><option value={450}>450mm</option><option value={600}>600mm</option></select>
-                  <label className="flex items-center gap-2"><input type="checkbox" checked={activeWall.showBracing} onChange={e => updateActiveWall('showBracing', e.target.checked)} /> <span className="text-sm text-gray-300">Bracing</span></label>
-                </div>
-              </section>
-
-              {/* NEW LININGS SECTION */}
-              <section className="space-y-3 pt-2 border-t border-gray-800">
-                <h3 className="text-xs font-bold text-gray-500 uppercase">Linings</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[10px] text-gray-400">Internal</label>
-                    <select value={activeWall.internalLining} onChange={e => updateActiveWall('internalLining', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-gray-200">
-                      {materials.filter(m => m.type !== 'external').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-gray-400">External</label>
-                    <select value={activeWall.externalLining} onChange={e => updateActiveWall('externalLining', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-gray-200">
-                      {materials.filter(m => m.type !== 'internal').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <button onClick={toggleWallFlip} className="w-full mt-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 text-gray-300 text-xs py-1 rounded flex items-center justify-center gap-2 transition">
-                    <ArrowLeftRight className="w-3 h-3" /> Flip Internal/External Sides
-                </button>
-              </section>
-
-              <section className="space-y-3">
-                <div className="flex justify-between"><h3 className="text-xs font-bold text-gray-500 uppercase">Openings</h3><button onClick={() => updateActiveWall('openings', [...activeWall.openings, { id: Date.now(), startX: 500, width: 900, height: 2100, sillHeight: 0 }])} className="text-blue-400"><Plus className="w-4 h-4"/></button></div>
-                <div className="space-y-2">
-                  {activeWall.openings.map((op, idx) => (
-                    <div key={op.id} className="bg-gray-800 p-2 rounded border border-gray-700 text-sm space-y-2">
-                      <div className="flex justify-between text-xs text-gray-400"><span>#{idx+1}</span><button onClick={() => updateActiveWall('openings', activeWall.openings.filter(o => o.id !== op.id))} className="text-red-400"><Trash2 className="w-3 h-3"/></button></div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div><label className="text-[10px]">Start X</label><input type="text" value={op.startX} onChange={e => { const n = [...activeWall.openings]; n[idx].startX = e.target.value; updateActiveWall('openings', n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1 text-gray-200" /></div>
-                        <div><label className="text-[10px]">Width</label><input type="text" value={op.width} onChange={e => { const n = [...activeWall.openings]; n[idx].width = e.target.value; updateActiveWall('openings', n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1 text-gray-200" /></div>
-                        <div><label className="text-[10px]">Height</label><input type="text" value={op.height} onChange={e => { const n = [...activeWall.openings]; n[idx].height = e.target.value; updateActiveWall('openings', n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1 text-gray-200" /></div>
-                        <div><label className="text-[10px]">Sill</label><input type="text" value={op.sillHeight} onChange={e => { const n = [...activeWall.openings]; n[idx].sillHeight = e.target.value; updateActiveWall('openings', n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1 text-gray-200" /></div>
-                      </div>
+             <div className="space-y-4">
+                <div className="flex justify-between">
+                    <input className="bg-transparent border-b w-32 font-bold" value={activeWall.name} onChange={e => updateActiveWall('name', e.target.value)} />
+                    <div className="flex gap-2">
+                        <button onClick={toggleWallFlip} className="p-1 text-blue-400 hover:bg-gray-800 rounded" title="Flip Wall Side"><ArrowLeftRight className="w-4 h-4"/></button>
+                        <button onClick={() => { if(walls.length>1) setWalls(walls.filter(w=>w.id!==selectedWallId)); }} className="p-1 text-red-400 hover:bg-gray-800 rounded"><Trash2 className="w-4 h-4"/></button>
                     </div>
-                  ))}
                 </div>
-              </section>
-            </>
-          )}
-
-          {/* --- TAB: MATERIALS --- */}
-          {activeTab === 'materials' && (
-            <div className="space-y-4">
-                <h3 className="text-xs font-bold text-gray-500 uppercase flex items-center gap-2"><Palette className="w-4 h-4"/> Material Creator</h3>
-                
-                <div className="bg-gray-800 p-3 rounded border border-gray-700 space-y-3">
-                    <div>
-                        <label className="text-[10px] text-gray-400">Material Name</label>
-                        <input type="text" value={newMat.name} onChange={e => setNewMat({...newMat, name: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                        <div>
-                            <label className="text-[10px] text-gray-400">Thickness (mm)</label>
-                            <input type="number" value={newMat.thickness} onChange={e => setNewMat({...newMat, thickness: parseFloat(e.target.value)})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" />
-                        </div>
-                        <div>
-                            <label className="text-[10px] text-gray-400">Cavity (mm)</label>
-                            <input type="number" value={newMat.cavity} onChange={e => setNewMat({...newMat, cavity: parseFloat(e.target.value)})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" />
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                         <div>
-                            <label className="text-[10px] text-gray-400">Color</label>
-                            <input type="color" value={newMat.color} onChange={e => setNewMat({...newMat, color: e.target.value})} className="w-full h-8 bg-gray-900 border border-gray-600 rounded cursor-pointer" />
-                        </div>
-                         <div>
-                            <label className="text-[10px] text-gray-400">Opacity (0-1)</label>
-                            <input type="number" step="0.1" min="0" max="1" value={newMat.opacity} onChange={e => setNewMat({...newMat, opacity: parseFloat(e.target.value)})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" />
-                        </div>
-                    </div>
-                    <div>
-                        <label className="text-[10px] text-gray-400">Type</label>
-                        <select value={newMat.type} onChange={e => setNewMat({...newMat, type: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white">
-                            <option value="internal">Internal</option>
-                            <option value="external">External</option>
-                            <option value="both">Both</option>
-                        </select>
-                    </div>
-                    <button onClick={addMaterial} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-1 rounded text-sm font-bold">Add Custom Material</button>
+                <div className="grid grid-cols-2 gap-2">
+                    <div><label className="text-xs text-gray-400">Length</label><input type="number" value={activeWall.length} onChange={e => updateActiveWall('length', e.target.value)} className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-sm"/></div>
+                    <div><label className="text-xs text-gray-400">Height</label><input type="number" value={activeWall.height} onChange={e => updateActiveWall('height', e.target.value)} className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-sm"/></div>
                 </div>
-
-                <div className="space-y-2">
-                    <h4 className="text-xs font-bold text-gray-400 uppercase">Available Materials</h4>
-                    {materials.filter(m => m.id !== 'none').map(m => (
-                        <div key={m.id} className="bg-gray-800 p-2 rounded border border-gray-700 flex justify-between items-center">
-                            <div>
-                                <div className="text-sm font-semibold text-gray-200">{m.name}</div>
-                                <div className="text-[10px] text-gray-500">{m.thickness}mm thick • {m.cavity}mm cavity</div>
-                            </div>
-                            <div className="w-4 h-4 rounded-full border border-gray-600" style={{backgroundColor: m.color, opacity: m.opacity}}></div>
+                <div className="space-y-2 pt-2 border-t border-gray-700">
+                    <label className="text-xs text-gray-400 block">Linings</label>
+                    <select value={activeWall.internalLining} onChange={e => updateActiveWall('internalLining', e.target.value)} className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs">{materials.filter(m=>m.type!=='external').map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select>
+                    <select value={activeWall.externalLining} onChange={e => updateActiveWall('externalLining', e.target.value)} className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs">{materials.filter(m=>m.type!=='internal').map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select>
+                </div>
+                <div className="space-y-2 pt-2 border-t border-gray-700">
+                    <div className="flex justify-between"><label className="text-xs text-gray-400">Openings</label><button onClick={()=>updateActiveWall('openings', [...activeWall.openings, {id:Date.now(), startX:500, width:900, height:2100, sillHeight:0}])}><Plus className="w-4 h-4 text-blue-400"/></button></div>
+                    {activeWall.openings.map((op, idx) => (
+                        <div key={op.id} className="bg-gray-800 p-2 rounded border border-gray-600 grid grid-cols-2 gap-2">
+                             <input type="number" value={op.startX} onChange={e=>{const n=[...activeWall.openings]; n[idx].startX=e.target.value; updateActiveWall('openings', n)}} className="bg-gray-900 border-gray-700 rounded px-1 text-xs" placeholder="X"/>
+                             <input type="number" value={op.width} onChange={e=>{const n=[...activeWall.openings]; n[idx].width=e.target.value; updateActiveWall('openings', n)}} className="bg-gray-900 border-gray-700 rounded px-1 text-xs" placeholder="W"/>
                         </div>
                     ))}
                 </div>
+             </div>
+          )}
+          
+          {activeTab === 'materials' && (
+            <div className="space-y-4">
+                <h3 className="text-xs font-bold text-gray-500 uppercase flex items-center gap-2"><Palette className="w-4 h-4"/> Material Creator</h3>
+                <div className="bg-gray-800 p-3 rounded border border-gray-700 space-y-3">
+                    <div><label className="text-[10px] text-gray-400">Name</label><input type="text" value={newMat.name} onChange={e => setNewMat({...newMat, name: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <div><label className="text-[10px] text-gray-400">Thick (mm)</label><input type="number" value={newMat.thickness} onChange={e => setNewMat({...newMat, thickness: parseFloat(e.target.value)})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
+                        <div><label className="text-[10px] text-gray-400">Cavity (mm)</label><input type="number" value={newMat.cavity} onChange={e => setNewMat({...newMat, cavity: parseFloat(e.target.value)})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
+                    </div>
+                    <div><label className="text-[10px] text-gray-400">Color</label><input type="color" value={newMat.color} onChange={e => setNewMat({...newMat, color: e.target.value})} className="w-full h-8 bg-gray-900 border border-gray-600 rounded cursor-pointer" /></div>
+                    <button onClick={addMaterial} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-1 rounded text-sm font-bold">Add Material</button>
+                </div>
             </div>
           )}
-
-          {/* --- TAB: BOM --- */}
+          
           {activeTab === 'bom' && (
             <div className="space-y-4">
-               <div className="flex items-center justify-between">
-                 <h3 className="text-xs font-bold text-gray-500 uppercase flex gap-2"><ShoppingCart className="w-4 h-4"/> Global Order</h3>
-               </div>
-               
-               {/* STRUCTURAL */}
+               <h3 className="text-xs font-bold text-gray-500 uppercase flex gap-2"><ShoppingCart className="w-4 h-4"/> Global Order</h3>
                <div className="space-y-4">
-                 <div className="text-xs text-blue-400 font-bold uppercase tracking-wider">Framing Timber</div>
-                 {Object.keys(globalBOM.structural).sort().map(section => (
-                   <div key={section} className="bg-gray-800 rounded border border-gray-700 overflow-hidden text-xs">
-                     <div className="bg-gray-900 p-2 font-bold text-blue-400 flex justify-between items-center">
-                       <span>{section}</span>
-                       <span className="text-gray-500 text-[10px]">
-                         {((globalBOM.structural[section].totalLM) / 1000).toFixed(1)}m Total
-                       </span>
-                     </div>
-                     {globalBOM.structural[section].orderList && (
-                       <div className="bg-blue-900/20 p-2 border-b border-gray-700">
-                         <div className="flex flex-wrap gap-2">
-                           {Object.entries(globalBOM.structural[section].orderList).sort((a,b)=>b[0]-a[0]).map(([len, count]) => (
-                             <span key={len} className="bg-blue-600 text-white px-2 py-0.5 rounded text-[11px] font-mono">
-                               {count}x {len}mm
-                             </span>
-                           ))}
-                         </div>
-                       </div>
-                     )}
+                 <div className="text-xs text-blue-400 font-bold uppercase tracking-wider">Framing</div>
+                 {Object.keys(globalBOM.structural).map(section => (
+                   <div key={section} className="bg-gray-800 rounded border border-gray-700 overflow-hidden text-xs p-2 flex justify-between">
+                       <span>{section}</span><span className="text-gray-500">{((globalBOM.structural[section].totalLM)/1000).toFixed(1)}m</span>
                    </div>
                  ))}
                </div>
-
-               {/* LININGS */}
-               <div className="space-y-4 pt-2 border-t border-gray-700">
-                 <div className="text-xs text-green-400 font-bold uppercase tracking-wider">Wall Linings</div>
-                 {Object.keys(globalBOM.linings).length === 0 ? <div className="text-gray-500 text-xs italic">No linings selected</div> : 
-                   Object.entries(globalBOM.linings).map(([type, area]) => (
-                     <div key={type} className="flex justify-between bg-gray-800 p-2 rounded border border-gray-700 text-xs">
-                        <span className="text-gray-300">{type}</span>
-                        <span className="font-mono text-white font-bold">{area.toFixed(1)} m²</span>
-                     </div>
-                   ))
-                 }
-               </div>
             </div>
           )}
-
         </div>
       </div>
 
       {/* CANVAS AREA */}
       <div className="flex-1 relative bg-[#12141a]">
-        <div className="absolute top-4 right-4 flex gap-2 z-10">
-           {/* VIEW TABS */}
-           <div className="bg-gray-900 rounded p-1 flex gap-1 border border-gray-700">
-              <button onClick={() => setViewMode('plan')} className={`px-3 py-1 rounded text-xs font-bold ${viewMode==='plan'?'bg-blue-600 text-white':'text-gray-400 hover:text-white'}`}>2D Plan</button>
-              <button onClick={() => setViewMode('3d')} className={`px-3 py-1 rounded text-xs font-bold ${viewMode==='3d'?'bg-blue-600 text-white':'text-gray-400 hover:text-white'}`}>3D Model</button>
-           </div>
-
-           {viewMode === '3d' && (
-             <button onClick={() => setProjectionMode(m => m === 'perspective' ? 'orthographic' : 'perspective')} 
-                     className={`p-2 rounded shadow border border-gray-600 text-white transition ${projectionMode === 'orthographic' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}
-                     title="Toggle Ortho/Persp">
-                {projectionMode === 'perspective' ? <Box className="w-4 h-4" /> : <Grid className="w-4 h-4" />}
-             </button>
-           )}
-
-           <button onClick={() => setView3D(DEFAULT_VIEW)} className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded shadow border border-gray-600"><RotateCw className="w-4 h-4"/></button>
-           <button onClick={handleExport} className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded shadow flex items-center gap-2 text-sm font-semibold pr-4"><Download className="w-4 h-4"/> Export House</button>
-        </div>
-        
-        {/* Zoom Controls Overlay for Plan Mode */}
-        {viewMode === 'plan' && (
-            <div className="absolute bottom-12 right-4 flex flex-col gap-2 z-10">
-                <button onClick={() => setPlanView(p => ({...p, zoom: Math.min(p.zoom * 1.2, 5)}))} className="bg-gray-800 p-2 rounded hover:bg-gray-700 border border-gray-600 text-white">
-                    <ZoomIn className="w-4 h-4" />
-                </button>
-                <button onClick={() => setPlanView(p => ({...p, zoom: Math.max(p.zoom / 1.2, 0.1)}))} className="bg-gray-800 p-2 rounded hover:bg-gray-700 border border-gray-600 text-white">
-                    <ZoomOut className="w-4 h-4" />
-                </button>
-            </div>
-        )}
-
-        {!showSettings && <button onClick={() => setShowSettings(true)} className="absolute top-4 left-4 bg-gray-800 p-2 rounded text-white z-10"><Settings className="w-4 h-4"/></button>}
-        {showSettings && <button onClick={() => setShowSettings(false)} className="absolute top-4 left-[340px] bg-gray-800 p-2 rounded-r text-gray-400 z-10 border-y border-r border-gray-700"><X className="w-3 h-3"/></button>}
-        
-        {viewMode === 'plan' ? (
-            <canvas ref={planCanvasRef} width={1600} height={1200} className="w-full h-full cursor-crosshair block"
-              onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handlePlanMouseUp} onMouseLeave={handlePlanMouseUp} onWheel={handlePlanWheel}
-            />
-        ) : (
+         <div className="absolute top-4 right-4 flex gap-2 z-10">
+             <div className="bg-gray-900 rounded p-1 flex gap-1 border border-gray-700">
+                <button onClick={() => setViewMode('plan')} className={`px-3 py-1 rounded text-xs font-bold ${viewMode==='plan'?'bg-blue-600 text-white':'text-gray-400 hover:text-white'}`}>2D</button>
+                <button onClick={() => setViewMode('3d')} className={`px-3 py-1 rounded text-xs font-bold ${viewMode==='3d'?'bg-blue-600 text-white':'text-gray-400 hover:text-white'}`}>3D</button>
+             </div>
+             {viewMode === '3d' && (
+               <button onClick={() => setProjectionMode(m => m === 'perspective' ? 'orthographic' : 'perspective')} className={`p-2 rounded shadow border border-gray-600 text-white transition ${projectionMode === 'orthographic' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`} title="Toggle Ortho/Persp">
+                  {projectionMode === 'perspective' ? <Box className="w-4 h-4" /> : <Grid className="w-4 h-4" />}
+               </button>
+             )}
+             <button onClick={handleExport} className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded shadow"><Download className="w-4 h-4"/></button>
+         </div>
+         
+         {viewMode === 'plan' ? (
+            <>
+                <canvas ref={planCanvasRef} width={1600} height={1200} className="w-full h-full cursor-crosshair block"
+                  onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handlePlanMouseUp} onMouseLeave={handlePlanMouseUp} onWheel={handlePlanWheel}
+                />
+                <div className="absolute bottom-12 right-4 flex flex-col gap-2">
+                    <button onClick={()=>setPlanView(p=>({...p, zoom:p.zoom*1.2}))} className="bg-gray-800 p-2 rounded text-white"><ZoomIn className="w-4 h-4"/></button>
+                    <button onClick={()=>setPlanView(p=>({...p, zoom:p.zoom/1.2}))} className="bg-gray-800 p-2 rounded text-white"><ZoomOut className="w-4 h-4"/></button>
+                </div>
+            </>
+         ) : (
             <canvas ref={canvasRef} width={1600} height={1200} className="w-full h-full cursor-move block"
-              onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => { setIsDragging(false); setIsPanning(false); }} onMouseLeave={() => { setIsDragging(false); setIsPanning(false); }}
-              onWheel={(e) => setView3D(v => ({...v, zoom: Math.max(0.1, v.zoom - e.deltaY * 0.001)}))}
+              onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={()=>{setIsDragging(false);setIsPanning(false)}} onMouseLeave={()=>{setIsDragging(false);setIsPanning(false)}}
+              onWheel={(e)=>setView3D(v=>({...v, zoom:Math.max(0.1, v.zoom-e.deltaY*0.001)}))}
             />
-        )}
-        
-        <div className="absolute bottom-4 left-4 text-gray-500 text-xs pointer-events-none select-none">
+         )}
+         <div className="absolute bottom-4 left-4 text-gray-500 text-xs pointer-events-none select-none">
             {viewMode === 'plan' ? 'Click to Draw Wall • Drag to Pan' : 'Left Drag: Rotate • Shift+Drag: Pan • Scroll: Zoom'}
-        </div>
+         </div>
       </div>
     </div>
   );
