@@ -1,831 +1,564 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle } from 'lucide-react';
+
+// --- AS 1684 CONSTANTS & LOGIC HELPERS ---
+const TIMBER_SIZES = {
+  '70x35': { d: 70, t: 35, grade: 'MGP10' },
+  '90x35': { d: 90, t: 35, grade: 'MGP10' },
+  '90x45': { d: 90, t: 45, grade: 'MGP10' },
+  '140x45': { d: 140, t: 45, grade: 'MGP12' }
+};
+
+const DEFAULT_VIEW = { rotX: 20, rotY: -35, zoom: 0.8, panX: 0, panY: 50 };
 
 const AS1684WallGenerator = () => {
+  // --- STATE ---
   const [wallLength, setWallLength] = useState(3600);
   const [wallHeight, setWallHeight] = useState(2400);
   const [studSize, setStudSize] = useState('90x45');
   const [studSpacing, setStudSpacing] = useState(450);
-  const [timberGrade, setTimberGrade] = useState('MGP10');
   const [openings, setOpenings] = useState([]);
-  const [showBracing, setShowBracing] = useState(false);
-  const [view3D, setView3D] = useState({ rotX: 20, rotY: 45, zoom: 1, panX: 0, panY: 0 });
+  const [showBracing, setShowBracing] = useState(true);
+  const [view3D, setView3D] = useState(DEFAULT_VIEW);
+  const [activeTab, setActiveTab] = useState('controls'); 
+  const [showSettings, setShowSettings] = useState(true);
+
+  // AI State
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiResponse, setAiResponse] = useState(null);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+
+  // Mouse interaction state
   const [isDragging, setIsDragging] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [showSettings, setShowSettings] = useState(false);
+
   const canvasRef = useRef(null);
 
-  const timberSizes = {
-    '70x35': { width: 70, depth: 35 },
-    '90x35': { width: 90, depth: 35 },
-    '90x45': { width: 90, depth: 45 },
-    '140x45': { width: 140, depth: 45 }
-  };
-
-  const addOpening = () => {
-    setOpenings([...openings, {
-      id: Date.now(),
-      startX: 500,
-      width: 900,
-      height: 2100,
-      sillHeight: 0,
-      type: 'door'
-    }]);
-  };
-
-  const removeOpening = (id) => {
-    setOpenings(openings.filter(o => o.id !== id));
-  };
-
-  const updateOpening = (id, field, value) => {
-    setOpenings(openings.map(o => 
-      o.id === id ? { ...o, [field]: parseFloat(value) || 0 } : o
-    ));
-  };
-
-  const generateWallFraming = () => {
-    const timber = timberSizes[studSize];
-    const components = [];
-
-    // Bottom and Top plates - plates DON'T extend through openings
-    // We'll need to break plates at openings
+  // --- GEMINI API HELPERS ---
+  const callGemini = async (userPrompt, systemInstruction, isJson = false) => {
+    const apiKey = ""; // Provided by environment
+    setIsAiLoading(true);
+    setAiResponse(null);
+    setAiAnalysis(null);
     
-    // Collect all opening boundaries
-    const openingBoundaries = openings.map(o => ({
-      start: o.startX - timber.depth,
-      end: o.startX + o.width + timber.depth
-    })).sort((a, b) => a.start - b.start);
-    
-    // Create plate segments between openings
-    const plateStartX = -timber.depth / 2;
-    const plateEndX = wallLength + timber.depth / 2;
-    
-    let currentX = plateStartX;
-    
-    if (openingBoundaries.length === 0) {
-      // No openings - continuous plates
-      components.push({
-        type: 'bottom_plate',
-        x: plateStartX, y: 0, z: 0,
-        length: plateEndX - plateStartX,
-        width: timber.depth,
-        depth: timber.width
-      });
-      components.push({
-        type: 'top_plate_1',
-        x: plateStartX, y: wallHeight - timber.depth, z: 0,
-        length: plateEndX - plateStartX,
-        width: timber.depth,
-        depth: timber.width
-      });
-      components.push({
-        type: 'top_plate_2',
-        x: plateStartX, y: wallHeight - timber.depth * 2, z: 0,
-        length: plateEndX - plateStartX,
-        width: timber.depth,
-        depth: timber.width
-      });
-    } else {
-      // Create plate segments
-      openingBoundaries.forEach(opening => {
-        if (currentX < opening.start) {
-          const segmentLength = opening.start - currentX;
-          components.push({
-            type: 'bottom_plate',
-            x: currentX, y: 0, z: 0,
-            length: segmentLength,
-            width: timber.depth,
-            depth: timber.width
-          });
-          components.push({
-            type: 'top_plate_1',
-            x: currentX, y: wallHeight - timber.depth, z: 0,
-            length: segmentLength,
-            width: timber.depth,
-            depth: timber.width
-          });
-          components.push({
-            type: 'top_plate_2',
-            x: currentX, y: wallHeight - timber.depth * 2, z: 0,
-            length: segmentLength,
-            width: timber.depth,
-            depth: timber.width
-          });
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: userPrompt }] }],
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            generationConfig: isJson ? { responseMimeType: "application/json" } : {}
+          }),
         }
-        currentX = opening.end;
-      });
-      
-      // Final segment after last opening
-      if (currentX < plateEndX) {
-        const segmentLength = plateEndX - currentX;
-        components.push({
-          type: 'bottom_plate',
-          x: currentX, y: 0, z: 0,
-          length: segmentLength,
-          width: timber.depth,
-          depth: timber.width
-        });
-        components.push({
-          type: 'top_plate_1',
-          x: currentX, y: wallHeight - timber.depth, z: 0,
-          length: segmentLength,
-          width: timber.depth,
-          depth: timber.width
-        });
-        components.push({
-          type: 'top_plate_2',
-          x: currentX, y: wallHeight - timber.depth * 2, z: 0,
-          length: segmentLength,
-          width: timber.depth,
-          depth: timber.width
-        });
-      }
-    }
+      );
 
-    const studPositions = [];
-    
-    // Always place studs at 0 and wallLength (end studs)
-    studPositions.push(0);
-    
-    for (let x = studSpacing; x < wallLength; x += studSpacing) {
+      if (!response.ok) throw new Error(`API Error: ${response.status}`);
+      const data = await response.json();
+      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       
-      let isBlocked = false;
-      for (const opening of openings) {
-        if (x >= opening.startX && x <= opening.startX + opening.width) {
-          isBlocked = true;
-          break;
-        }
+      setIsAiLoading(false);
+      return resultText;
+    } catch (error) {
+      console.error("Gemini API Error:", error);
+      setIsAiLoading(false);
+      setAiResponse(`Error: ${error.message}`);
+      return null;
+    }
+  };
+
+  const handleAIGenerate = async () => {
+    if (!aiPrompt.trim()) return;
+
+    const systemPrompt = `
+      You are a structural CAD generator assistant. 
+      Extract wall parameters from the user's description.
+      
+      Output JSON format:
+      {
+        "wallLength": number (mm, default 3600),
+        "wallHeight": number (mm, default 2400),
+        "studSpacing": number (450 or 600, default 450),
+        "openings": [
+          { "startX": number (mm from left), "width": number, "height": number, "sillHeight": number (0 for doors, ~900 for windows) }
+        ]
       }
       
-      if (!isBlocked) {
-        studPositions.push(x);
+      Rules:
+      - Standard door is ~2100 high x 820-920 wide. Sill height 0.
+      - Standard window is ~900-1200 high. Sill height ~900.
+      - Ensure startX keeps items within the wall length.
+    `;
+
+    const jsonString = await callGemini(aiPrompt, systemPrompt, true);
+    
+    if (jsonString) {
+      try {
+        const specs = JSON.parse(jsonString);
+        if (specs.wallLength) setWallLength(specs.wallLength);
+        if (specs.wallHeight) setWallHeight(specs.wallHeight);
+        if (specs.studSpacing) setStudSpacing(specs.studSpacing);
+        if (specs.openings) setOpenings(specs.openings.map(o => ({ ...o, id: Date.now() + Math.random() })));
+        setAiResponse("Wall updated based on your description!");
+      } catch (e) {
+        setAiResponse("Failed to parse AI design. Try being more specific.");
       }
     }
-    
-    // Always add end stud at wallLength if not already there
-    if (studPositions[studPositions.length - 1] !== wallLength) {
-      studPositions.push(wallLength);
-    }
-    
-    // Now create studs at all positions
-    studPositions.forEach(x => {
-      components.push({
-        type: 'stud',
-        x: x - timber.depth / 2,
-        y: timber.depth,
-        z: 0,
-        length: timber.depth,
-        width: wallHeight - timber.depth * 3,
-        depth: timber.width
-      });
-    });
+  };
 
-    openings.forEach(opening => {
-      const startX = opening.startX;
-      const endX = opening.startX + opening.width;
+  const handleAIComplianceCheck = async () => {
+    const context = {
+      wallLength,
+      wallHeight,
+      studSize,
+      studSpacing,
+      timberGrade: TIMBER_SIZES[studSize]?.grade || 'Unknown',
+      openingsCount: openings.length
+    };
 
-      components.push({
-        type: 'jamb_stud_left',
-        x: startX - timber.depth,
-        y: timber.depth,
-        z: 0,
-        length: timber.depth,
-        width: wallHeight - timber.depth * 3,
-        depth: timber.width
-      });
-      components.push({
-        type: 'jamb_stud_right',
-        x: endX,
-        y: timber.depth,
-        z: 0,
-        length: timber.depth,
-        width: wallHeight - timber.depth * 3,
-        depth: timber.width
-      });
+    const systemPrompt = `
+      You are an expert Structural Engineer specializing in AS 1684.
+      Analyze the JSON wall data.
+      Provide a brief 3-point assessment focusing on:
+      1. Slenderness ratio risks.
+      2. Stud spacing appropriateness.
+      3. Lintel checks.
+    `;
 
-      const lintelDepth = opening.width > 1200 ? timber.width * 2 : timber.width;
-      
-      components.push({
-        type: 'jack_stud_left',
-        x: startX - timber.depth / 2,
-        y: timber.depth,
-        z: 0,
-        length: timber.depth,
-        width: opening.sillHeight + opening.height,
-        depth: timber.width
-      });
-      components.push({
-        type: 'jack_stud_right',
-        x: endX - timber.depth / 2,
-        y: timber.depth,
-        z: 0,
-        length: timber.depth,
-        width: opening.sillHeight + opening.height,
-        depth: timber.width
-      });
+    const advice = await callGemini(JSON.stringify(context), systemPrompt, false);
+    setAiAnalysis(advice);
+  };
 
-      components.push({
-        type: 'lintel',
-        x: startX - timber.depth,
-        y: timber.depth + opening.sillHeight + opening.height,
-        z: 0,
-        length: opening.width + timber.depth * 2,
-        width: lintelDepth,
-        depth: timber.depth
-      });
+  // --- LOGIC ENGINE ---
+  const generateFrame = useMemo(() => {
+    try {
+        const { d: depth, t: thickness } = TIMBER_SIZES[studSize] || TIMBER_SIZES['90x45'];
+        const components = [];
+        
+        // Track vertical members for correct noggin placement
+        // format: { x: number (left edge), type: string }
+        const verticalMembers = []; 
 
-      if (opening.sillHeight > 0) {
-        components.push({
-          type: 'sill',
-          x: startX - timber.depth,
-          y: timber.depth + opening.sillHeight,
-          z: 0,
-          length: opening.width + timber.depth * 2,
-          width: timber.depth,
-          depth: timber.depth
-        });
-
-        for (let x = startX; x < endX; x += studSpacing) {
+        const addMember = (type, x, y, z, len, w, d_dim, color, rotation = 0) => {
           components.push({
-            type: 'cripple_stud',
-            x: x - timber.depth / 2,
-            y: timber.depth,
-            z: 0,
-            length: timber.depth,
-            width: opening.sillHeight,
-            depth: timber.width
+            id: Math.random().toString(36).substr(2, 9),
+            type, x, y, z, len, w, d: d_dim, color, rotation
           });
+        };
+
+        // A. PLATES
+        // The plates need to extend to the outside face of the end studs.
+        // Since studs are centered on the grid lines (0 and wallLength), they extend
+        // by thickness/2 on each side.
+        const plateStartX = -thickness / 2;
+        const fullPlateLength = wallLength + thickness;
+
+        // Bottom Plate Logic
+        let currentX = plateStartX;
+        const sortedOpenings = [...openings].sort((a, b) => a.startX - b.startX);
+        const doorOpenings = sortedOpenings.filter(o => o.sillHeight === 0);
+        
+        if (doorOpenings.length === 0) {
+          addMember('Bottom Plate', plateStartX, 0, 0, fullPlateLength, thickness, depth, '#8B5A2B');
+        } else {
+          let plateX = plateStartX;
+          doorOpenings.forEach(door => {
+            const doorStartX = door.startX - thickness; // Jamb stud left edge
+            if (doorStartX > plateX) {
+              addMember('Bottom Plate', plateX, 0, 0, doorStartX - plateX, thickness, depth, '#8B5A2B');
+            }
+            plateX = door.startX + door.width; // Jamb stud right edge
+          });
+          const finalPlateEnd = wallLength + thickness/2;
+          if (plateX < finalPlateEnd) {
+            addMember('Bottom Plate', plateX, 0, 0, finalPlateEnd - plateX, thickness, depth, '#8B5A2B');
+          }
         }
-      }
 
-      for (let x = startX; x < endX; x += studSpacing) {
-        components.push({
-          type: 'cripple_stud_top',
-          x: x - timber.depth / 2,
-          y: timber.depth + opening.sillHeight + opening.height + lintelDepth,
-          z: 0,
-          length: timber.depth,
-          width: wallHeight - timber.depth * 3 - opening.sillHeight - opening.height - lintelDepth,
-          depth: timber.width
+        // Top Plates (continuous)
+        addMember('Top Plate (Lower)', plateStartX, wallHeight - (thickness * 2), 0, fullPlateLength, thickness, depth, '#A0522D');
+        addMember('Top Plate (Upper)', plateStartX, wallHeight - thickness, 0, fullPlateLength, thickness, depth, '#A0522D');
+
+        // B. STUDS
+        const gridPositions = [];
+        const safeSpacing = Math.max(100, studSpacing); 
+        for (let x = 0; x <= wallLength; x += safeSpacing) gridPositions.push(x);
+        if (gridPositions[gridPositions.length - 1] !== wallLength) gridPositions.push(wallLength);
+
+        gridPositions.forEach(xPos => {
+          let startY = thickness;
+          let endY = wallHeight - (thickness * 2);
+          let isDeleted = false;
+          let lowerStud = null;
+          let upperStud = null;
+
+          for (const op of openings) {
+            const opStart = op.startX;
+            const opEnd = op.startX + op.width;
+            if (xPos > opStart + 10 && xPos < opEnd - 10) {
+              isDeleted = true;
+              if (op.sillHeight > 0) {
+                lowerStud = { y: thickness, h: op.sillHeight - thickness };
+              }
+              let lintelDepth = op.width > 1200 ? 190 : 140; 
+              const spaceAbove = (wallHeight - (thickness * 2)) - (op.sillHeight + op.height + lintelDepth);
+              if (spaceAbove > 20) {
+                 upperStud = { y: op.sillHeight + op.height + lintelDepth, h: spaceAbove };
+              }
+              break;
+            }
+          }
+
+          const studX = xPos - (thickness/2);
+
+          if (!isDeleted) {
+            addMember('Common Stud', studX, startY, 0, thickness, endY - startY, depth, '#DEB887');
+            verticalMembers.push({ x: studX, type: 'common' });
+          } else {
+            if (lowerStud) addMember('Jack Stud', studX, lowerStud.y, 0, thickness, lowerStud.h, depth, '#EECFA1');
+            if (upperStud) addMember('Cripple Stud', studX, upperStud.y, 0, thickness, upperStud.h, depth, '#EECFA1');
+          }
         });
-      }
-    });
 
-    const nogginHeight = wallHeight / 2;
-    for (let i = 0; i < studPositions.length - 1; i++) {
-      const stagger = i % 2 === 0 ? timber.depth / 2 : -timber.depth / 2;
-      components.push({
-        type: 'noggin',
-        x: studPositions[i] + timber.depth / 2,
-        y: nogginHeight + stagger,
-        z: 0,
-        length: studPositions[i + 1] - studPositions[i] - timber.depth,
-        width: timber.depth,
-        depth: timber.width
-      });
+        // C. OPENINGS (JAMBS & LINTELS)
+        openings.forEach(op => {
+          const { startX, width, height, sillHeight } = op;
+          let lintelDepth = width > 1200 ? 190 : 140;
+          const headHeight = sillHeight + height;
+          
+          // Left Jamb
+          const leftJambX = startX - thickness;
+          addMember('Jamb Stud', leftJambX, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, '#CD853F');
+          verticalMembers.push({ x: leftJambX, type: 'jamb' });
+
+          // Right Jamb
+          const rightJambX = startX + width;
+          addMember('Jamb Stud', rightJambX, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, '#CD853F');
+          verticalMembers.push({ x: rightJambX, type: 'jamb' });
+
+          addMember('Lintel', startX - thickness, headHeight, 0, width + (thickness * 2), lintelDepth, depth, '#8B4513');
+          if (sillHeight > 0) addMember('Sill Trimmer', startX, sillHeight, 0, width, thickness, depth, '#A0522D');
+        });
+
+        // D. NOGGINS (SMART PLACEMENT)
+        // 1. Sort all vertical members by X position
+        verticalMembers.sort((a, b) => a.x - b.x);
+        
+        // 2. Remove duplicates (rare, but possible if grid aligns perfectly with jamb)
+        const uniqueVerticals = verticalMembers.filter((v, i, a) => i === 0 || Math.abs(v.x - a[i-1].x) > 1);
+
+        const nogginCenter = wallHeight / 2;
+
+        for (let i = 0; i < uniqueVerticals.length - 1; i++) {
+            const v1 = uniqueVerticals[i];
+            const v2 = uniqueVerticals[i+1];
+            
+            // Calculate gap between right edge of v1 and left edge of v2
+            const gapStart = v1.x + thickness;
+            const gapEnd = v2.x;
+            const gapWidth = gapEnd - gapStart;
+
+            if (gapWidth < 10) continue; // Skip tiny gaps
+
+            // Check if this gap is INSIDE an opening
+            const midX = (gapStart + gapEnd) / 2;
+            let insideOpening = false;
+            
+            for (const op of openings) {
+                // Buffer of 10mm to avoid edge cases
+                if (midX > op.startX && midX < op.startX + op.width) {
+                    // Check if noggin height conflicts with opening
+                    const opTop = op.sillHeight + op.height;
+                    const opBottom = op.sillHeight;
+                    // Standard noggins at mid-height. If opening covers mid-height, we skip.
+                    if (nogginCenter > opBottom && nogginCenter < opTop) {
+                        insideOpening = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!insideOpening) {
+                // Stagger logic based on index
+                const yPos = (i % 2 === 0) ? nogginCenter + 25 : nogginCenter - 25;
+                addMember('Noggin', gapStart, yPos, 0, gapWidth, thickness, depth, '#BC8F8F');
+            }
+        }
+
+        // E. BRACING
+        if (showBracing) {
+           const solidPanels = [];
+           let currentStart = 0;
+           const allOps = [...openings].sort((a,b) => a.startX - b.startX);
+           
+           allOps.forEach(op => {
+               if (op.startX > currentStart) solidPanels.push({ start: currentStart, end: op.startX });
+               currentStart = op.startX + op.width;
+           });
+           
+           if (currentStart < wallLength) solidPanels.push({ start: currentStart, end: wallLength });
+
+           solidPanels.forEach(panel => {
+               const panelWidth = panel.end - panel.start;
+               if (panelWidth > 1200) {
+                   const padding = 100;
+                   const braceRun = panelWidth - (padding * 2);
+                   const braceRise = wallHeight - 200; 
+                   const braceLen = Math.sqrt(Math.pow(braceRun, 2) + Math.pow(braceRise, 2));
+                   const angleRad = Math.atan2(braceRise, braceRun);
+                   const angleDeg = angleRad * (180 / Math.PI);
+                   
+                   addMember('Metal Brace', panel.start + padding, 100, depth, braceLen, 40, 2, '#708090', angleDeg);
+               }
+           });
+        }
+
+        return components;
+    } catch (err) {
+        console.error("Frame generation error:", err);
+        return [];
     }
+  }, [wallLength, wallHeight, studSize, studSpacing, openings, showBracing]);
 
-    if (showBracing) {
-      const braceLength = Math.sqrt(wallLength * wallLength + (wallHeight - timber.depth * 3) * (wallHeight - timber.depth * 3));
-      const angle = Math.atan((wallHeight - timber.depth * 3) / wallLength);
-      
-      components.push({
-        type: 'brace',
-        x: 0,
-        y: timber.depth,
-        z: timber.width / 2,
-        length: braceLength,
-        width: timber.depth,
-        depth: 35,
-        angle: angle * 180 / Math.PI
-      });
-    }
-
-    return components;
-  };
-
-  const handleMouseDown = (e) => {
-    if (e.shiftKey) {
-      setIsPanning(true);
-    } else {
-      setIsDragging(true);
-    }
-    setDragStart({ x: e.clientX, y: e.clientY });
-  };
-
-  const handleMouseMove = (e) => {
-    if (isPanning) {
-      const deltaX = e.clientX - dragStart.x;
-      const deltaY = e.clientY - dragStart.y;
-      
-      setView3D(prev => ({
-        ...prev,
-        panX: prev.panX + deltaX,
-        panY: prev.panY + deltaY
-      }));
-      
-      setDragStart({ x: e.clientX, y: e.clientY });
-    } else if (isDragging) {
-      const deltaX = e.clientX - dragStart.x;
-      const deltaY = e.clientY - dragStart.y;
-      
-      setView3D(prev => ({
-        ...prev,
-        rotY: (prev.rotY + deltaX * 0.5) % 360,
-        rotX: Math.max(-90, Math.min(90, prev.rotX - deltaY * 0.5))
-      }));
-      
-      setDragStart({ x: e.clientX, y: e.clientY });
-    }
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-    setIsPanning(false);
-  };
-
-  const handleWheel = (e) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setView3D(prev => ({
-      ...prev,
-      zoom: Math.max(0.1, Math.min(5, prev.zoom * delta))
-    }));
-  };
-
-  const resetView = () => {
-    setView3D({ rotX: 20, rotY: 45, zoom: 1, panX: 0, panY: 0 });
-  };
-
+  // --- RENDERING ENGINE ---
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
     const height = canvas.height;
 
-    ctx.clearRect(0, 0, width, height);
-
-    const components = generateWallFraming();
+    ctx.fillStyle = '#1a1d26';
+    ctx.fillRect(0, 0, width, height);
     
-    const centerX = wallLength / 2;
-    const centerY = wallHeight / 2;
-    const centerZ = timberSizes[studSize].width / 2;
-    
-    const scale = Math.min(width / (wallLength * 1.2), height / (wallHeight * 1.2)) * view3D.zoom;
-    const offsetX = width / 2;
-    const offsetY = height / 2;
+    if (!generateFrame || generateFrame.length === 0) return;
 
+    const { d: studDepth } = TIMBER_SIZES[studSize] || TIMBER_SIZES['90x45'];
+    const cx = wallLength / 2;
+    const cy = wallHeight / 2;
+    const cz = studDepth / 2;
+    const scale = Math.min(width / (wallLength * 1.4), height / (wallHeight * 1.4)) * view3D.zoom;
+    
     const project = (x, y, z) => {
-      let x1 = x - centerX;
-      let y1 = y - centerY;
-      let z1 = z - centerZ;
+      let dx = x - cx;
+      let dy = y - cy;
+      let dz = z - cz;
 
-      const rotX = view3D.rotX * Math.PI / 180;
-      const rotY = view3D.rotY * Math.PI / 180;
+      const radY = view3D.rotY * (Math.PI / 180);
+      const radX = view3D.rotX * (Math.PI / 180);
 
-      let x2 = x1 * Math.cos(rotY) - z1 * Math.sin(rotY);
-      let z2 = x1 * Math.sin(rotY) + z1 * Math.cos(rotY);
+      let x1 = dx * Math.cos(radY) - dz * Math.sin(radY);
+      let z1 = dx * Math.sin(radY) + dz * Math.cos(radY);
 
-      let y2 = y1 * Math.cos(rotX) - z2 * Math.sin(rotX);
-      let z3 = y1 * Math.sin(rotX) + z2 * Math.cos(rotX);
+      let y2 = dy * Math.cos(radX) - z1 * Math.sin(radX);
+      let z2 = dy * Math.sin(radX) + z1 * Math.cos(radX);
 
+      const dist = 2000 + z2;
+      const f = 2000 / (dist < 100 ? 100 : dist);
+      
       return {
-        x: offsetX + x2 * scale + view3D.panX,
-        y: offsetY - y2 * scale + view3D.panY,
-        depth: z3
+        x: (width / 2) + (x1 * f) * scale + view3D.panX,
+        y: (height / 2) - (y2 * f) * scale + view3D.panY,
+        z: z2
       };
     };
 
-    const drawBox = (comp) => {
-      const { x, y, z, length, width, depth } = comp;
+    let allFaces = [];
 
-      const corners = [
-        [x, y, z],
-        [x + length, y, z],
-        [x + length, y + width, z],
-        [x, y + width, z],
-        [x, y, z + depth],
-        [x + length, y, z + depth],
-        [x + length, y + width, z + depth],
-        [x, y + width, z + depth]
+    const rotatePoint = (px, py, angleDeg) => {
+        if (!angleDeg) return { x: px, y: py };
+        const rad = angleDeg * (Math.PI / 180);
+        return {
+            x: px * Math.cos(rad) - py * Math.sin(rad),
+            y: px * Math.sin(rad) + py * Math.cos(rad)
+        };
+    };
+
+    generateFrame.forEach(comp => {
+      const { x, y, z, len, w, d, color, rotation } = comp;
+      
+      const rawVerts = [
+        {x: 0, y: 0, z: 0}, {x: len, y: 0, z: 0}, {x: len, y: w, z: 0}, {x: 0, y: w, z: 0},
+        {x: 0, y: 0, z: d}, {x: len, y: 0, z: d}, {x: len, y: w, z: d}, {x: 0, y: w, z: d}
       ];
 
-      const projected = corners.map(c => project(c[0], c[1], c[2]));
+      const worldVerts = rawVerts.map(v => {
+          const rot = rotatePoint(v.x, v.y, rotation);
+          return { x: x + rot.x, y: y + rot.y, z: z + v.z };
+      });
 
-      const colors = {
-        bottom_plate: '#8B4513',
-        top_plate_1: '#A0522D',
-        top_plate_2: '#A0522D',
-        stud: '#CD853F',
-        jamb_stud_left: '#D2691E',
-        jamb_stud_right: '#D2691E',
-        jack_stud_left: '#D2691E',
-        jack_stud_right: '#D2691E',
-        lintel: '#8B4513',
-        sill: '#A0522D',
-        cripple_stud: '#DEB887',
-        cripple_stud_top: '#DEB887',
-        noggin: '#BC8F8F',
-        brace: '#4169E1'
-      };
-
-      ctx.strokeStyle = colors[comp.type] || '#DEB887';
-      ctx.fillStyle = ctx.strokeStyle + '70';
-      ctx.lineWidth = 1.5;
+      const p = worldVerts.map(pt => project(pt.x, pt.y, pt.z));
 
       const faces = [
-        { indices: [0, 1, 2, 3], avgDepth: (projected[0].depth + projected[1].depth + projected[2].depth + projected[3].depth) / 4 },
-        { indices: [4, 5, 6, 7], avgDepth: (projected[4].depth + projected[5].depth + projected[6].depth + projected[7].depth) / 4 },
-        { indices: [0, 1, 5, 4], avgDepth: (projected[0].depth + projected[1].depth + projected[5].depth + projected[4].depth) / 4 },
-        { indices: [2, 3, 7, 6], avgDepth: (projected[2].depth + projected[3].depth + projected[7].depth + projected[6].depth) / 4 },
-        { indices: [0, 3, 7, 4], avgDepth: (projected[0].depth + projected[3].depth + projected[7].depth + projected[4].depth) / 4 },
-        { indices: [1, 2, 6, 5], avgDepth: (projected[1].depth + projected[2].depth + projected[6].depth + projected[5].depth) / 4 }
+        { v: [0, 1, 2, 3], c: color },
+        { v: [5, 4, 7, 6], c: adjustColor(color, -20) },
+        { v: [4, 0, 3, 7], c: adjustColor(color, -10) },
+        { v: [1, 5, 6, 2], c: adjustColor(color, -10) },
+        { v: [3, 2, 6, 7], c: adjustColor(color, 20) },
+        { v: [4, 5, 1, 0], c: adjustColor(color, -30) }
       ];
-
-      faces.sort((a, b) => b.avgDepth - a.avgDepth);
 
       faces.forEach(face => {
-        ctx.beginPath();
-        ctx.moveTo(projected[face.indices[0]].x, projected[face.indices[0]].y);
-        face.indices.forEach(idx => ctx.lineTo(projected[idx].x, projected[idx].y));
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-      });
-    };
-
-    components.forEach(comp => drawBox(comp));
-
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= wallLength; i += 600) {
-      const p1 = project(i, 0, 0);
-      const p2 = project(i, wallHeight, 0);
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-      ctx.stroke();
-    }
-
-  }, [wallLength, wallHeight, studSize, studSpacing, openings, showBracing, view3D]);
-
-  const exportModel = async () => {
-    const components = generateWallFraming();
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-    
-    // Export as DXF format
-    let dxf = "0\nSECTION\n2\nHEADER\n";
-    dxf += "9\n$ACADVER\n1\nAC1015\n";
-    dxf += "9\n$INSUNITS\n70\n4\n"; // Millimeters
-    dxf += "0\nENDSEC\n";
-    
-    dxf += "0\nSECTION\n2\nTABLES\n";
-    dxf += "0\nTABLE\n2\nLAYER\n70\n1\n";
-    dxf += "0\nLAYER\n2\nFRAME\n70\n0\n62\n7\n6\nCONTINUOUS\n";
-    dxf += "0\nENDTAB\n0\nENDSEC\n";
-    
-    dxf += "0\nSECTION\n2\nENTITIES\n";
-
-    components.forEach((comp) => {
-      const { x, y, z, length, width, depth } = comp;
-      
-      // Draw each box as 12 lines (edges)
-      const edges = [
-        // Bottom rectangle
-        [[x, y, z], [x + length, y, z]],
-        [[x + length, y, z], [x + length, y + width, z]],
-        [[x + length, y + width, z], [x, y + width, z]],
-        [[x, y + width, z], [x, y, z]],
-        // Top rectangle
-        [[x, y, z + depth], [x + length, y, z + depth]],
-        [[x + length, y, z + depth], [x + length, y + width, z + depth]],
-        [[x + length, y + width, z + depth], [x, y + width, z + depth]],
-        [[x, y + width, z + depth], [x, y, z + depth]],
-        // Vertical edges
-        [[x, y, z], [x, y, z + depth]],
-        [[x + length, y, z], [x + length, y, z + depth]],
-        [[x + length, y + width, z], [x + length, y + width, z + depth]],
-        [[x, y + width, z], [x, y + width, z + depth]]
-      ];
-
-      edges.forEach(edge => {
-        dxf += "0\nLINE\n8\nFRAME\n";
-        dxf += `10\n${edge[0][0].toFixed(2)}\n20\n${edge[0][1].toFixed(2)}\n30\n${edge[0][2].toFixed(2)}\n`;
-        dxf += `11\n${edge[1][0].toFixed(2)}\n21\n${edge[1][1].toFixed(2)}\n31\n${edge[1][2].toFixed(2)}\n`;
+        const zDepth = (p[face.v[0]].z + p[face.v[1]].z + p[face.v[2]].z + p[face.v[3]].z) / 4;
+        allFaces.push({ pts: face.v.map(i => p[i]), z: zDepth, color: face.c });
       });
     });
 
-    dxf += "0\nENDSEC\n0\nEOF\n";
+    allFaces.sort((a, b) => b.z - a.z);
 
-    // Export DXF
-    try {
-      const blobDxf = new Blob([dxf], { type: 'application/dxf' });
-      const urlDxf = URL.createObjectURL(blobDxf);
-      const aDxf = document.createElement('a');
-      aDxf.href = urlDxf;
-      aDxf.download = `AS1684_Wall_${wallLength}x${wallHeight}_${timestamp}.dxf`;
-      document.body.appendChild(aDxf);
-      aDxf.click();
-      document.body.removeChild(aDxf);
-      
-      // Small delay to ensure first download starts
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      URL.revokeObjectURL(urlDxf);
-    } catch (error) {
-      console.error('DXF Export failed:', error);
-    }
+    allFaces.forEach(f => {
+      ctx.beginPath();
+      ctx.moveTo(f.pts[0].x, f.pts[0].y);
+      ctx.lineTo(f.pts[1].x, f.pts[1].y);
+      ctx.lineTo(f.pts[2].x, f.pts[2].y);
+      ctx.lineTo(f.pts[3].x, f.pts[3].y);
+      ctx.closePath();
+      ctx.fillStyle = f.color;
+      ctx.fill();
+      ctx.strokeStyle = '#00000040';
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+    });
 
-    // Export OBJ
-    try {
-      let obj = "# AS 1684 Timber Wall Frame Export\n";
-      obj += `# Generated: ${new Date().toLocaleString()}\n`;
-      obj += `# Wall: ${wallLength}mm x ${wallHeight}mm\n`;
-      obj += `# Timber: ${studSize}mm ${timberGrade}\n`;
-      obj += `# Spacing: ${studSpacing}mm centers\n`;
-      obj += `# Components: ${components.length}\n\n`;
+  }, [generateFrame, view3D, wallLength, wallHeight, studSize]);
 
-      let vertexCount = 1;
+  const adjustColor = (hex, amount) => {
+    return '#' + hex.replace(/^#/, '').replace(/../g, color => ('0' + Math.min(255, Math.max(0, parseInt(color, 16) + amount)).toString(16)).substr(-2));
+  }
 
-      components.forEach((comp, idx) => {
-        obj += `o ${comp.type}_${idx}\n`;
-        
-        const { x, y, z, length, width, depth } = comp;
-        
-        const vertices = [
-          [x, y, z], 
-          [x + length, y, z], 
-          [x + length, y + width, z], 
-          [x, y + width, z],
-          [x, y, z + depth], 
-          [x + length, y, z + depth], 
-          [x + length, y + width, z + depth], 
-          [x, y + width, z + depth]
-        ];
+  const handleExport = () => {
+    let obj = `# AS 1684 Export\n`;
+    let vc = 1;
+    generateFrame.forEach((m, i) => {
+      obj += `o ${m.type.replace(/\s/g, '_')}_${i}\n`;
+      const v = [
+        [m.x, m.y, m.z], [m.x+m.len, m.y, m.z], [m.x+m.len, m.y+m.w, m.z], [m.x, m.y+m.w, m.z],
+        [m.x, m.y, m.z+m.d], [m.x+m.len, m.y, m.z+m.d], [m.x+m.len, m.y+m.w, m.z+m.d], [m.x, m.y+m.w, m.z+m.d]
+      ];
+      v.forEach(vt => obj += `v ${vt[0]} ${vt[1]} ${vt[2]}\n`);
+      const f = [[1,2,3,4],[5,8,7,6],[1,5,6,2],[2,6,7,3],[3,7,8,4],[5,1,4,8]];
+      f.forEach(fa => obj += `f ${fa[0]+vc-1} ${fa[1]+vc-1} ${fa[2]+vc-1} ${fa[3]+vc-1}\n`);
+      vc += 8;
+    });
+    const blob = new Blob([obj], {type: 'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'frame.obj';
+    a.click();
+  };
 
-        vertices.forEach(v => {
-          obj += `v ${v[0].toFixed(2)} ${v[1].toFixed(2)} ${v[2].toFixed(2)}\n`;
-        });
+  const handleMouseDown = (e) => {
+    if (e.shiftKey) setIsPanning(true);
+    else setIsDragging(true);
+    setDragStart({ x: e.clientX, y: e.clientY });
+  };
 
-        // Add normals for better rendering
-        obj += `vn 0 0 -1\nvn 0 0 1\nvn 0 -1 0\nvn 0 1 0\nvn -1 0 0\nvn 1 0 0\n`;
-
-        const faces = [
-          [1, 2, 3, 4], // front
-          [8, 7, 6, 5], // back
-          [5, 6, 2, 1], // bottom
-          [4, 3, 7, 8], // top
-          [1, 4, 8, 5], // left
-          [2, 6, 7, 3]  // right
-        ];
-
-        faces.forEach((face, fIdx) => {
-          obj += `f ${face[0] + vertexCount - 1}//${fIdx + 1} ${face[1] + vertexCount - 1}//${fIdx + 1} ${face[2] + vertexCount - 1}//${fIdx + 1} ${face[3] + vertexCount - 1}//${fIdx + 1}\n`;
-        });
-
-        vertexCount += 8;
-        obj += "\n";
-      });
-
-      const blobObj = new Blob([obj], { type: 'text/plain' });
-      const urlObj = URL.createObjectURL(blobObj);
-      const aObj = document.createElement('a');
-      aObj.href = urlObj;
-      aObj.download = `AS1684_Wall_${wallLength}x${wallHeight}_${timestamp}.obj`;
-      document.body.appendChild(aObj);
-      aObj.click();
-      document.body.removeChild(aObj);
-      
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      URL.revokeObjectURL(urlObj);
-    } catch (error) {
-      console.error('OBJ Export failed:', error);
-    }
+  const handleMouseMove = (e) => {
+    if (!isDragging && !isPanning) return;
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    setDragStart({ x: e.clientX, y: e.clientY });
+    if (isPanning) setView3D(v => ({ ...v, panX: v.panX + dx, panY: v.panY + dy }));
+    else setView3D(v => ({ ...v, rotY: v.rotY + dx * 0.5, rotX: Math.max(-90, Math.min(90, v.rotX - dy * 0.5)) }));
   };
 
   return (
-    <div className="w-full h-screen bg-gray-950 text-white flex relative">
-      {/* Floating Properties Panel */}
-      <div className={`absolute top-4 left-4 bg-gray-900 bg-opacity-95 backdrop-blur-sm rounded-lg shadow-2xl border border-gray-700 z-10 transition-all ${showSettings ? 'w-80' : 'w-auto'}`}>
-        <div className="p-3 border-b border-gray-700 flex items-center justify-between bg-gray-800 rounded-t-lg">
-          <div className="flex items-center gap-2">
-            <Settings className="w-5 h-5 text-blue-400" />
-            <span className="font-semibold text-sm">Wall Properties</span>
+    <div className="w-full h-screen bg-gray-950 text-gray-100 flex overflow-hidden font-sans">
+      
+      {/* SIDEBAR */}
+      <div className={`flex-shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col transition-all ${showSettings ? 'w-80' : 'w-0 overflow-hidden'}`}>
+        <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+          <h1 className="font-bold flex items-center gap-2"><Settings className="w-5 h-5 text-blue-500" /> Wall Builder</h1>
+          <div className="flex gap-1 bg-gray-800 rounded p-1">
+             <button onClick={() => setActiveTab('controls')} className={`px-2 py-1 text-xs rounded ${activeTab==='controls'?'bg-blue-600':'hover:bg-gray-700'}`}>Edit</button>
+             <button onClick={() => setActiveTab('bom')} className={`px-2 py-1 text-xs rounded ${activeTab==='bom'?'bg-blue-600':'hover:bg-gray-700'}`}>BOM</button>
+             <button onClick={() => setActiveTab('ai')} className={`px-2 py-1 text-xs rounded flex items-center gap-1 ${activeTab==='ai'?'bg-purple-600':'hover:bg-gray-700'}`}><Sparkles className="w-3 h-3"/> AI</button>
           </div>
-          <button
-            onClick={() => setShowSettings(!showSettings)}
-            className="text-gray-400 hover:text-white transition"
-          >
-            {showSettings ? <X className="w-4 h-4" /> : <Settings className="w-4 h-4" />}
-          </button>
         </div>
 
-        {showSettings && (
-          <div className="p-4 space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto">
-            <div>
-              <label className="block text-xs font-medium mb-1 text-gray-300">Length (mm)</label>
-              <input
-                type="number"
-                value={wallLength}
-                onChange={(e) => setWallLength(parseFloat(e.target.value) || 0)}
-                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
-                step="100"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium mb-1 text-gray-300">Height (mm)</label>
-              <input
-                type="number"
-                value={wallHeight}
-                onChange={(e) => setWallHeight(parseFloat(e.target.value) || 0)}
-                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
-                step="100"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium mb-1 text-gray-300">Stud Size</label>
-              <select
-                value={studSize}
-                onChange={(e) => setStudSize(e.target.value)}
-                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
-              >
-                {Object.keys(timberSizes).map(size => (
-                  <option key={size} value={size}>{size}mm</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium mb-1 text-gray-300">Spacing</label>
-              <select
-                value={studSpacing}
-                onChange={(e) => setStudSpacing(Number(e.target.value))}
-                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
-              >
-                <option value="450">450mm</option>
-                <option value="600">600mm</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium mb-1 text-gray-300">Grade</label>
-              <select
-                value={timberGrade}
-                onChange={(e) => setTimberGrade(e.target.value)}
-                className="w-full bg-gray-800 px-2 py-1.5 rounded text-sm border border-gray-600 focus:border-blue-500 outline-none"
-              >
-                <option value="MGP10">MGP10</option>
-                <option value="MGP12">MGP12</option>
-                <option value="MGP15">MGP15</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showBracing}
-                  onChange={(e) => setShowBracing(e.target.checked)}
-                  className="w-3.5 h-3.5"
-                />
-                <span className="text-xs text-gray-300">Diagonal Bracing</span>
-              </label>
-            </div>
-
-            <div className="pt-3 border-t border-gray-700">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xs font-semibold text-gray-300">Openings</h3>
-                <button
-                  onClick={addOpening}
-                  className="bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded flex items-center gap-1 text-xs transition"
-                >
-                  <Plus className="w-3 h-3" /> Add
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                {openings.map(opening => (
-                  <div key={opening.id} className="bg-gray-800 p-2 rounded space-y-1.5 border border-gray-700">
-                    <div className="flex justify-between items-center">
-                      <select
-                        value={opening.type}
-                        onChange={(e) => updateOpening(opening.id, 'type', e.target.value)}
-                        className="bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
-                      >
-                        <option value="door">Door</option>
-                        <option value="window">Window</option>
-                      </select>
-                      <button
-                        onClick={() => removeOpening(opening.id)}
-                        className="text-red-400 hover:text-red-300 transition"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          {activeTab === 'controls' && (
+            <>
+              <section className="space-y-3">
+                <h3 className="text-xs font-bold text-gray-500 uppercase">Dimensions</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="text-xs text-gray-400">Length</label><input type="number" value={wallLength} onChange={e => setWallLength(Number(e.target.value))} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm" /></div>
+                  <div><label className="text-xs text-gray-400">Height</label><input type="number" value={wallHeight} onChange={e => setWallHeight(Number(e.target.value))} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm" /></div>
+                </div>
+              </section>
+              <section className="space-y-3">
+                <h3 className="text-xs font-bold text-gray-500 uppercase">Structure</h3>
+                <div className="space-y-2">
+                  <select value={studSize} onChange={e => setStudSize(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm">{Object.keys(TIMBER_SIZES).map(s => <option key={s} value={s}>{s}</option>)}</select>
+                  <select value={studSpacing} onChange={e => setStudSpacing(Number(e.target.value))} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-sm"><option value={450}>450mm</option><option value={600}>600mm</option></select>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={showBracing} onChange={e => setShowBracing(e.target.checked)} /> <span className="text-sm">Bracing</span></label>
+                </div>
+              </section>
+              <section className="space-y-3">
+                <div className="flex justify-between"><h3 className="text-xs font-bold text-gray-500 uppercase">Openings</h3><button onClick={() => setOpenings([...openings, { id: Date.now(), startX: 1000, width: 900, height: 2100, sillHeight: 0 }])} className="text-blue-400"><Plus className="w-4 h-4"/></button></div>
+                <div className="space-y-2">
+                  {openings.map((op, idx) => (
+                    <div key={op.id} className="bg-gray-800 p-2 rounded border border-gray-700 text-sm space-y-2">
+                      <div className="flex justify-between text-xs text-gray-400"><span>#{idx+1}</span><button onClick={() => setOpenings(openings.filter(o => o.id !== op.id))} className="text-red-400"><Trash2 className="w-3 h-3"/></button></div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div><label className="text-[10px]">Start X</label><input type="number" value={op.startX} onChange={e => { const n = [...openings]; n[idx].startX = Number(e.target.value); setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
+                        <div><label className="text-[10px]">Width</label><input type="number" value={op.width} onChange={e => { const n = [...openings]; n[idx].width = Number(e.target.value); setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
+                        <div><label className="text-[10px]">Height</label><input type="number" value={op.height} onChange={e => { const n = [...openings]; n[idx].height = Number(e.target.value); setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
+                        <div><label className="text-[10px]">Sill</label><input type="number" value={op.sillHeight} onChange={e => { const n = [...openings]; n[idx].sillHeight = Number(e.target.value); setOpenings(n); }} className="w-full bg-gray-900 border border-gray-700 rounded px-1" /></div>
+                      </div>
                     </div>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
 
-                    <input
-                      type="number"
-                      placeholder="Start X"
-                      value={opening.startX}
-                      onChange={(e) => updateOpening(opening.id, 'startX', e.target.value)}
-                      className="w-full bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
-                    />
-                    <input
-                      type="number"
-                      placeholder="Width"
-                      value={opening.width}
-                      onChange={(e) => updateOpening(opening.id, 'width', e.target.value)}
-                      className="w-full bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
-                    />
-                    <input
-                      type="number"
-                      placeholder="Height"
-                      value={opening.height}
-                      onChange={(e) => updateOpening(opening.id, 'height', e.target.value)}
-                      className="w-full bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
-                    />
-                    <input
-                      type="number"
-                      placeholder="Sill Height"
-                      value={opening.sillHeight}
-                      onChange={(e) => updateOpening(opening.id, 'sillHeight', e.target.value)}
-                      className="w-full bg-gray-700 px-2 py-1 rounded text-xs border border-gray-600"
-                    />
-                  </div>
-                ))}
-              </div>
+          {activeTab === 'bom' && (
+            <div className="space-y-4">
+               <h3 className="text-xs font-bold text-gray-500 uppercase flex gap-2"><FileText className="w-4 h-4"/> Bill of Materials</h3>
+               <div className="bg-gray-800 rounded border border-gray-700 overflow-hidden text-xs">
+                 <table className="w-full text-left">
+                   <thead className="bg-gray-900 text-gray-400"><tr><th className="p-2">Item</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">LM</th></tr></thead>
+                   <tbody className="divide-y divide-gray-700">{Object.entries(generateFrame.reduce((acc, item) => { if(!acc[item.type]) acc[item.type]={c:0,l:0}; acc[item.type].c++; acc[item.type].l+=item.len; return acc; }, {})).map(([k,v])=>(<tr key={k}><td className="p-2">{k}</td><td className="p-2 text-right">{v.c}</td><td className="p-2 text-right">{(v.l/1000).toFixed(1)}m</td></tr>))}</tbody>
+                 </table>
+               </div>
+               <button onClick={handleAIComplianceCheck} disabled={isAiLoading} className="w-full bg-gray-800 p-2 rounded text-sm flex justify-center gap-2 border border-gray-700">{isAiLoading?'Checking...':<><CheckCircle className="w-4 h-4 text-green-500"/> Check Compliance</>}</button>
+               {aiAnalysis && <div className="bg-blue-900/30 p-2 rounded text-xs text-blue-200 whitespace-pre-wrap">{aiAnalysis}</div>}
             </div>
-          </div>
-        )}
+          )}
 
-        {!showSettings && (
-          <div className="p-3 text-xs space-y-1 text-gray-300">
-            <div>L: {wallLength}mm × H: {wallHeight}mm</div>
-            <div>{studSize}mm @ {studSpacing}mm • {timberGrade}</div>
-          </div>
-        )}
-      </div>
-
-      {/* Floating Controls */}
-      <div className="absolute top-4 right-4 flex flex-col gap-2 z-10">
-        <button
-          onClick={exportModel}
-          className="bg-green-600 hover:bg-green-700 p-3 rounded-lg shadow-lg flex items-center gap-2 text-sm font-semibold transition"
-        >
-          <Download className="w-4 h-4" />
-          Export (DXF + OBJ)
-        </button>
-        <button
-          onClick={resetView}
-          className="bg-gray-800 hover:bg-gray-700 p-3 rounded-lg shadow-lg border border-gray-600 transition"
-        >
-          <RotateCw className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Info Badge */}
-      <div className="absolute bottom-4 left-4 bg-gray-900 bg-opacity-95 backdrop-blur-sm px-4 py-2 rounded-lg shadow-lg border border-gray-700 text-xs text-gray-300 z-10">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1">
-            <Move className="w-3 h-3" />
-            <span>Drag to rotate</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="bg-gray-700 px-1 rounded">Shift</span>
-            <span>+ Drag to pan</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <ZoomIn className="w-3 h-3" />
-            <span>Scroll to zoom</span>
-          </div>
+          {activeTab === 'ai' && (
+            <div className="space-y-4">
+              <div className="bg-purple-900/30 border border-purple-500/30 p-3 rounded">
+                <h3 className="font-bold flex items-center gap-2"><Sparkles className="w-4 h-4 text-yellow-300"/> AI Designer</h3>
+                <p className="text-xs text-purple-200 mt-1">Describe your wall (e.g. "5m long, 2.7m high with a sliding door in middle")</p>
+              </div>
+              <textarea value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm h-32" placeholder="Describe wall..." />
+              <button onClick={handleAIGenerate} disabled={isAiLoading} className="w-full bg-purple-600 hover:bg-purple-500 text-white p-2 rounded text-sm font-bold shadow">{isAiLoading ? 'Designing...' : 'Generate Design'}</button>
+              {aiResponse && <div className="p-2 bg-gray-800 rounded text-xs border border-gray-700">{aiResponse}</div>}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Compliance Badge */}
-      <div className="absolute bottom-4 right-4 bg-blue-900 bg-opacity-90 backdrop-blur-sm px-3 py-2 rounded-lg shadow-lg border border-blue-700 text-xs text-blue-100 z-10 max-w-md">
-        <div className="font-semibold mb-1">AS 1684 Compliant</div>
-        <div className="opacity-80">Studs @ {studSpacing}mm • Noggins mid-height • Double top plate</div>
-      </div>
-
-      {/* 3D Canvas */}
-      <div className="w-full h-full flex items-center justify-center">
-        <canvas
-          ref={canvasRef}
-          width={1600}
-          height={1000}
-          className="cursor-move"
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onWheel={handleWheel}
+      {/* CANVAS AREA */}
+      <div className="flex-1 relative bg-[#12141a]">
+        <div className="absolute top-4 right-4 flex gap-2 z-10">
+           <button onClick={() => setView3D(DEFAULT_VIEW)} className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded shadow border border-gray-600"><RotateCw className="w-4 h-4"/></button>
+           <button onClick={handleExport} className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded shadow flex items-center gap-2 text-sm font-semibold pr-4"><Download className="w-4 h-4"/> Export</button>
+        </div>
+        {!showSettings && <button onClick={() => setShowSettings(true)} className="absolute top-4 left-4 bg-gray-800 p-2 rounded text-white z-10"><Settings className="w-4 h-4"/></button>}
+        {showSettings && <button onClick={() => setShowSettings(false)} className="absolute top-4 left-[340px] bg-gray-800 p-2 rounded-r text-gray-400 z-10 border-y border-r border-gray-700"><X className="w-3 h-3"/></button>}
+        
+        <canvas ref={canvasRef} width={1600} height={1200} className="w-full h-full cursor-move block"
+          onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => { setIsDragging(false); setIsPanning(false); }} onMouseLeave={() => { setIsDragging(false); setIsPanning(false); }}
+          onWheel={(e) => setView3D(v => ({...v, zoom: Math.max(0.1, v.zoom - e.deltaY * 0.001)}))}
         />
+        <div className="absolute bottom-4 left-4 text-gray-500 text-xs pointer-events-none select-none">Left Drag: Rotate • Shift+Drag: Pan • Scroll: Zoom</div>
       </div>
     </div>
   );
