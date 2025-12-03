@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle, Layers, ShoppingCart, Home, Copy, LayoutTemplate, Box, PenTool, MousePointer, ZoomOut } from 'lucide-react';
+import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle, Layers, ShoppingCart, Home, Copy, LayoutTemplate, Box, PenTool, MousePointer, ZoomOut, Palette, ArrowLeftRight } from 'lucide-react';
 
 // --- CONSTANTS ---
 const TIMBER_SIZES = {
@@ -9,10 +9,17 @@ const TIMBER_SIZES = {
   '140x45': { d: 140, t: 45, grade: 'MGP12' }
 };
 
-const LINING_OPTIONS = {
-  INTERNAL: ['None', 'Plasterboard 10mm', 'Plasterboard 13mm', 'Villaboard 6mm', 'VJ Paneling'],
-  EXTERNAL: ['None', 'Weatherboard', 'Brick Veneer', 'FC Cladding', 'Rendered Foam']
-};
+// Default Material Library
+const DEFAULT_MATERIALS = [
+    { id: 'none', name: 'None', thickness: 0, cavity: 0, color: '#ffffff', opacity: 0.0, type: 'both' },
+    { id: 'gyprock_10', name: 'Plasterboard 10mm', thickness: 10, cavity: 0, color: '#E0E0E0', opacity: 0.3, type: 'internal' },
+    { id: 'gyprock_13', name: 'Plasterboard 13mm', thickness: 13, cavity: 0, color: '#D0D0D0', opacity: 0.3, type: 'internal' },
+    { id: 'villaboard_6', name: 'Villaboard 6mm', thickness: 6, cavity: 0, color: '#B0BEC5', opacity: 0.4, type: 'internal' },
+    { id: 'weatherboard', name: 'Weatherboard', thickness: 20, cavity: 0, color: '#F5F5DC', opacity: 0.5, type: 'external' },
+    { id: 'brick_veneer', name: 'Brick Veneer 110mm', thickness: 110, cavity: 40, color: '#8B4513', opacity: 0.7, type: 'external' },
+    { id: 'fc_cladding', name: 'FC Sheet 9mm', thickness: 9, cavity: 0, color: '#90A4AE', opacity: 0.5, type: 'external' },
+    { id: 'hebel_75', name: 'Hebel 75mm', thickness: 75, cavity: 20, color: '#CFD8DC', opacity: 0.6, type: 'external' }
+];
 
 const COMMON_ORDER_LENGTHS = [2400, 2700, 3000, 3600, 4200, 4800, 5400, 6000];
 const DEFAULT_VIEW = { rotX: 20, rotY: -40, zoom: 0.6, panX: 0, panY: 50 };
@@ -37,9 +44,9 @@ const dist = (p1, p2) => {
 }
 
 // --- CORE ALGORITHM: GENERATE SINGLE WALL ---
-const generateSingleWallFrame = (wall) => {
+const generateSingleWallFrame = (wall, materialsList) => {
     try {
-        const { length, height, studSize, studSpacing, openings, showBracing } = wall;
+        const { length, height, studSize, studSpacing, openings, showBracing, isFlipped } = wall;
         
         const numLen = parseFloat(length) || 1000;
         const numHeight = parseFloat(height) || 2400;
@@ -47,8 +54,7 @@ const generateSingleWallFrame = (wall) => {
         const { d: depth, t: thickness } = TIMBER_SIZES[studSize] || TIMBER_SIZES['90x45'];
         
         const components = [];
-        const verticalMembers = []; 
-
+        
         const addMember = (type, x, y, z, len, w, d_dim, color, rotation = 0, opacity = 1.0) => {
             let cutLength = 0;
             let sectionSize = "";
@@ -86,15 +92,27 @@ const generateSingleWallFrame = (wall) => {
         const COL_LINING_INT = '#E0E0E0';
         const COL_LINING_EXT = '#A1887F';
 
-        // LININGS
-        if (wall.internalLining && wall.internalLining !== 'None') {
-            addMember('Int. Lining', 0, 0, -10, numLen, numHeight, 10, COL_LINING_INT, 0, 0.3);
+        // --- LININGS (DYNAMIC with FLIP) ---
+        // Standard: Internal = Back (Z<0), External = Front (Z>depth)
+        // Flipped: Internal = Front (Z>depth), External = Back (Z<0)
+
+        // Internal Lining
+        if (wall.internalLining && wall.internalLining !== 'none') {
+            const mat = materialsList.find(m => m.id === wall.internalLining) || DEFAULT_MATERIALS[1];
+            // If not flipped, offset backwards. If flipped, offset forwards from front face.
+            const zPos = !isFlipped ? (0 - (mat.cavity || 0) - mat.thickness) : (depth + (mat.cavity || 0));
+            addMember(`Int. ${mat.name}`, 0, 0, zPos, numLen, numHeight, mat.thickness, mat.color, 0, mat.opacity);
         }
-        if (wall.externalLining && wall.externalLining !== 'None') {
-            addMember('Ext. Lining', 0, 0, depth, numLen, numHeight, 10, COL_LINING_EXT, 0, 0.4);
+        
+        // External Lining
+        if (wall.externalLining && wall.externalLining !== 'none') {
+            const mat = materialsList.find(m => m.id === wall.externalLining) || DEFAULT_MATERIALS[4];
+            // If not flipped, offset forwards. If flipped, offset backwards from back face.
+            const zPos = !isFlipped ? (depth + (mat.cavity || 0)) : (0 - (mat.cavity || 0) - mat.thickness);
+            addMember(`Ext. ${mat.name}`, 0, 0, zPos, numLen, numHeight, mat.thickness, mat.color, 0, mat.opacity);
         }
 
-        // PLATES
+        // --- PLATES ---
         const plateStartX = -thickness / 2;
         const fullPlateLength = numLen + thickness;
 
@@ -122,11 +140,14 @@ const generateSingleWallFrame = (wall) => {
         addMember('Top Plate (Lower)', plateStartX, numHeight - (thickness * 2), 0, fullPlateLength, thickness, depth, COL_PLATE);
         addMember('Top Plate (Upper)', plateStartX, numHeight - thickness, 0, fullPlateLength, thickness, depth, COL_PLATE);
 
-        // STUDS
+        // --- STUDS ---
         const gridPositions = [];
         const safeSpacing = Math.max(100, numSpacing); 
         for (let x = 0; x <= numLen; x += safeSpacing) gridPositions.push(x);
         if (gridPositions[gridPositions.length - 1] !== numLen) gridPositions.push(numLen);
+
+        // Track verticals for noggins
+        const verticalMembers = []; 
 
         gridPositions.forEach(xPos => {
             let startY = thickness;
@@ -162,7 +183,7 @@ const generateSingleWallFrame = (wall) => {
             }
         });
 
-        // OPENINGS
+        // --- OPENINGS ---
         openings.forEach(op => {
             const opStart = parseFloat(op.startX) || 0;
             const opWidth = parseFloat(op.width) || 0;
@@ -183,7 +204,7 @@ const generateSingleWallFrame = (wall) => {
             if (opSill > 0) addMember('Sill Trimmer', opStart, opSill, 0, opWidth, thickness, depth, COL_PLATE);
         });
 
-        // NOGGINS
+        // --- NOGGINS ---
         verticalMembers.sort((a, b) => a.x - b.x);
         const uniqueVerticals = verticalMembers.filter((v, i, a) => i === 0 || Math.abs(v.x - a[i-1].x) > 1);
         const nogginCenter = numHeight / 2;
@@ -218,7 +239,7 @@ const generateSingleWallFrame = (wall) => {
             }
         }
 
-        // BRACING
+        // --- BRACING ---
         if (showBracing) {
            const solidPanels = [];
            let currentStart = 0;
@@ -242,7 +263,12 @@ const generateSingleWallFrame = (wall) => {
                       const braceLen = Math.sqrt(Math.pow(braceRun, 2) + Math.pow(braceRise, 2));
                       const angleRad = Math.atan2(braceRise, braceRun);
                       const angleDeg = angleRad * (180 / Math.PI);
-                      addMember('Metal Brace', panel.start + padding, 100, depth + 2, braceLen, 40, 2, COL_BRACE, angleDeg);
+                      
+                      // Flip Bracing: If normal (not flipped), sits at depth + 2. If flipped, sits at -2 (Back side).
+                      // Assuming Bracing always follows External side.
+                      const zBrace = !isFlipped ? (depth + 2) : (-2);
+
+                      addMember('Metal Brace', panel.start + padding, 100, zBrace, braceLen, 40, 2, COL_BRACE, angleDeg);
                    }
                }
            });
@@ -257,26 +283,25 @@ const generateSingleWallFrame = (wall) => {
 
 
 const AS1684WallGenerator = () => {
-  // --- MULTI-WALL STATE ---
+  // --- STATE ---
+  const [materials, setMaterials] = useState(DEFAULT_MATERIALS);
   const [walls, setWalls] = useState([
     { 
         id: 1, name: 'Wall 1', length: 3000, height: 2400, studSize: '90x45', studSpacing: 450, 
         openings: [], position: { x: 0, y: 0, rotation: 0 }, showBracing: true,
-        internalLining: 'None', externalLining: 'None'
+        internalLining: 'gyprock_10', externalLining: 'brick_veneer', isFlipped: false
     }
   ]);
   const [selectedWallId, setSelectedWallId] = useState(1);
-  const [includeWaste, setIncludeWaste] = useState(true);
   const [view3D, setView3D] = useState(DEFAULT_VIEW);
-  const [viewMode, setViewMode] = useState('plan'); // '3d' or 'plan'
+  const [viewMode, setViewMode] = useState('plan'); 
   const [projectionMode, setProjectionMode] = useState('perspective'); 
   const [activeTab, setActiveTab] = useState('walls'); 
   const [showSettings, setShowSettings] = useState(true);
+  const [newMat, setNewMat] = useState({ name: 'New Material', thickness: 10, cavity: 0, color: '#ffffff', opacity: 0.5, type: 'external' });
 
   // Drawing State
   const [drawState, setDrawState] = useState({ active: false, start: null, current: null, snapped: null });
-  
-  // Modification State
   const [dragHandle, setDragHandle] = useState(null); 
   const [hoverHandle, setHoverHandle] = useState(null); 
 
@@ -319,11 +344,18 @@ const AS1684WallGenerator = () => {
       openings: [], 
       position: newPos,
       showBracing: true,
-      internalLining: 'None',
-      externalLining: 'None'
+      internalLining: 'gyprock_10',
+      externalLining: 'brick_veneer',
+      isFlipped: false
     }]);
     setSelectedWallId(newId);
     setActiveTab('editor');
+  };
+
+  const addMaterial = () => {
+      const id = newMat.name.toLowerCase().replace(/\s/g, '_') + '_' + Date.now();
+      setMaterials([...materials, { ...newMat, id }]);
+      setNewMat({ name: 'New Material', thickness: 10, cavity: 0, color: '#ffffff', opacity: 0.5, type: 'external' });
   };
 
   // --- KEYBOARD HANDLERS ---
@@ -390,8 +422,6 @@ const AS1684WallGenerator = () => {
           if (dist({x:mx, y:my}, p1) < handleRadius) found = { wallId: w.id, type: 'start' };
           else if (dist({x:mx, y:my}, p2) < handleRadius) found = { wallId: w.id, type: 'end' };
       });
-      
-      // Only update state if changed to prevent re-render flood
       if (found?.wallId !== hoverHandle?.wallId || found?.type !== hoverHandle?.type) {
           setHoverHandle(found);
       }
@@ -400,16 +430,12 @@ const AS1684WallGenerator = () => {
 
   const handlePlanMouseDown = (e) => {
     const { x: mx, y: my } = getPlanCoordinates(e);
-    
-    // 1. Check Modify
-    const clickedHandle = hoverHandle; 
+    const clickedHandle = checkHoverHandle(mx, my);
     if (clickedHandle && !drawState.active) {
         setDragHandle(clickedHandle);
         setSelectedWallId(clickedHandle.wallId);
         return;
     }
-
-    // 2. Draw
     if (activeTab === 'walls' && drawState.active) {
         const snapped = getSnappedPosition(mx, my);
         const finalX = snapped.x;
@@ -435,8 +461,9 @@ const AS1684WallGenerator = () => {
                     openings: [],
                     position: { x: p1.x, y: p1.y, rotation: Math.round(rot) },
                     showBracing: true,
-                    internalLining: 'None',
-                    externalLining: 'None'
+                    internalLining: 'gyprock_10',
+                    externalLining: 'brick_veneer',
+                    isFlipped: false
                 }]);
                 setSelectedWallId(newId);
                 setDrawState({ ...drawState, start: p2, current: p2, snapped: snapped.isSnapToWall });
@@ -529,7 +556,7 @@ const AS1684WallGenerator = () => {
   const houseGeometry = useMemo(() => {
     let allComponents = [];
     walls.forEach(wall => {
-      const localParts = generateSingleWallFrame(wall);
+      const localParts = generateSingleWallFrame(wall, materials);
       const { x: wx, y: wy, rotation: wRot } = wall.position;
       const transformed = localParts.map(part => {
         return {
@@ -541,7 +568,7 @@ const AS1684WallGenerator = () => {
       allComponents = [...allComponents, ...transformed];
     });
     return allComponents;
-  }, [walls]);
+  }, [walls, materials]);
 
   // --- BOM ENGINE ---
   const globalBOM = useMemo(() => {
@@ -569,15 +596,21 @@ const AS1684WallGenerator = () => {
         w.openings.forEach(op => {
             area -= (op.width * op.height) / 1000000;
         });
-        if (w.internalLining && w.internalLining !== 'None') {
-            const key = w.internalLining;
-            if (!liningGroups[key]) liningGroups[key] = 0;
-            liningGroups[key] += area;
+        if (w.internalLining && w.internalLining !== 'none') {
+            const mat = materials.find(m => m.id === w.internalLining);
+            if (mat) {
+                const key = mat.name;
+                if (!liningGroups[key]) liningGroups[key] = 0;
+                liningGroups[key] += area;
+            }
         }
-        if (w.externalLining && w.externalLining !== 'None') {
-            const key = w.externalLining;
-            if (!liningGroups[key]) liningGroups[key] = 0;
-            liningGroups[key] += area;
+        if (w.externalLining && w.externalLining !== 'none') {
+            const mat = materials.find(m => m.id === w.externalLining);
+            if (mat) {
+                const key = mat.name;
+                if (!liningGroups[key]) liningGroups[key] = 0;
+                liningGroups[key] += area;
+            }
         }
     });
 
@@ -612,7 +645,7 @@ const AS1684WallGenerator = () => {
       rawGroups[sizeKey].orderList = orderSummary;
     });
     return { structural: rawGroups, linings: liningGroups };
-  }, [houseGeometry, walls]);
+  }, [houseGeometry, walls, materials]);
 
   // --- RENDER 3D LOOP ---
   useEffect(() => {
@@ -740,6 +773,7 @@ const AS1684WallGenerator = () => {
       const cx = width/2 + planView.x;
       const cy = height/2 + planView.y;
       
+      // Draw Grid Lines (1m spacing)
       ctx.strokeStyle = '#334155';
       ctx.lineWidth = 1;
       const gridSize = 1000 * planView.zoom;
@@ -762,21 +796,78 @@ const AS1684WallGenerator = () => {
           const isSel = w.id === selectedWallId;
           const isHover = hoverHandle && hoverHandle.wallId === w.id;
 
-          // Wall Line
-          ctx.strokeStyle = isSel ? '#3b82f6' : '#94a3b8';
-          ctx.lineWidth = 90 * planView.zoom; 
+          // Get Dimensions
+          const { d: studDepth } = TIMBER_SIZES[w.studSize] || TIMBER_SIZES['90x45'];
+          const intMat = materials.find(m => m.id === w.internalLining) || DEFAULT_MATERIALS[0];
+          const extMat = materials.find(m => m.id === w.externalLining) || DEFAULT_MATERIALS[0];
+
+          // Helper Vector Math
+          const dx = endX - startX;
+          const dy = endY - startY;
+          const len = Math.sqrt(dx*dx + dy*dy);
+          const nx = -dy / len; // Normal X
+          const ny = dx / len;  // Normal Y
+
+          // --- DRAW LAYERS ---
+          
+          // FLIP LOGIC
+          // If flipped: Internal uses +Normal, External uses -Normal
+          // Default: Internal uses -Normal, External uses +Normal
+          const dirInt = w.isFlipped ? 1 : -1;
+          const dirExt = w.isFlipped ? -1 : 1;
+
+          // 1. Frame (Core)
+          ctx.strokeStyle = isSel ? '#8B5A2B' : '#5D4037'; // Brown for timber
+          ctx.lineWidth = studDepth * planView.zoom;
           ctx.lineCap = 'butt';
           ctx.beginPath();
           ctx.moveTo(startX, startY);
           ctx.lineTo(endX, endY);
           ctx.stroke();
-          
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(startX, startY);
-          ctx.lineTo(endX, endY);
-          ctx.stroke();
+
+          // 2. Internal Lining
+          if (intMat.thickness > 0) {
+              const dist = (studDepth/2 + intMat.cavity + intMat.thickness/2) * planView.zoom * dirInt;
+              const isx = startX + nx * dist;
+              const isy = startY + ny * dist;
+              const iex = endX + nx * dist;
+              const iey = endY + ny * dist;
+              
+              ctx.beginPath();
+              ctx.moveTo(isx, isy);
+              ctx.lineTo(iex, iey);
+              ctx.lineWidth = intMat.thickness * planView.zoom;
+              ctx.strokeStyle = intMat.color;
+              ctx.stroke();
+          }
+
+          // 3. External Lining
+          if (extMat.thickness > 0) {
+              const dist = (studDepth/2 + extMat.cavity + extMat.thickness/2) * planView.zoom * dirExt;
+              const esx = startX + nx * dist;
+              const esy = startY + ny * dist;
+              const eex = endX + nx * dist;
+              const eey = endY + ny * dist;
+              
+              ctx.beginPath();
+              ctx.moveTo(esx, esy);
+              ctx.lineTo(eex, eey);
+              ctx.lineWidth = extMat.thickness * planView.zoom;
+              ctx.strokeStyle = extMat.color;
+              ctx.stroke();
+          }
+
+          // Centerline (White overlay)
+          if (isSel) {
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 1;
+              ctx.setLineDash([5, 5]);
+              ctx.beginPath();
+              ctx.moveTo(startX, startY);
+              ctx.lineTo(endX, endY);
+              ctx.stroke();
+              ctx.setLineDash([]);
+          }
 
           // Endpoints (Interactive)
           const handleSize = 5;
@@ -845,7 +936,7 @@ const AS1684WallGenerator = () => {
           }
       }
 
-  }, [walls, viewMode, planView, selectedWallId, drawState, hoverHandle]);
+  }, [walls, viewMode, planView, selectedWallId, drawState, hoverHandle, materials]);
 
   // --- HANDLERS ---
   const handleMouseDown = (e) => {
@@ -870,6 +961,10 @@ const AS1684WallGenerator = () => {
     alert("Exporting");
   };
 
+  const toggleWallFlip = () => {
+    updateActiveWall('isFlipped', !activeWall.isFlipped);
+  };
+
   return (
     <div className="w-full h-screen bg-gray-950 text-gray-100 flex overflow-hidden font-sans">
       
@@ -880,6 +975,7 @@ const AS1684WallGenerator = () => {
           <div className="flex gap-1 bg-gray-800 rounded p-1">
              <button onClick={() => setActiveTab('walls')} className={`px-2 py-1 text-xs rounded ${activeTab==='walls'?'bg-blue-600':'hover:bg-gray-700'}`}>Layout</button>
              <button onClick={() => setActiveTab('editor')} className={`px-2 py-1 text-xs rounded ${activeTab==='editor'?'bg-blue-600':'hover:bg-gray-700'}`}>Edit</button>
+             <button onClick={() => setActiveTab('materials')} className={`px-2 py-1 text-xs rounded ${activeTab==='materials'?'bg-blue-600':'hover:bg-gray-700'}`}>Mat.</button>
              <button onClick={() => setActiveTab('bom')} className={`px-2 py-1 text-xs rounded ${activeTab==='bom'?'bg-blue-600':'hover:bg-gray-700'}`}>BOM</button>
           </div>
         </div>
@@ -929,13 +1025,18 @@ const AS1684WallGenerator = () => {
             <>
               <div className="flex justify-between items-center mb-2">
                  <input className="bg-transparent font-bold border-b border-gray-700 focus:border-blue-500 outline-none w-32 text-gray-200" value={activeWall.name} onChange={e => updateActiveWall('name', e.target.value)} />
-                 <button onClick={() => { 
-                    if(walls.length > 1) {
-                        const newWalls = walls.filter(w => w.id !== selectedWallId);
-                        setWalls(newWalls);
-                        setSelectedWallId(newWalls[0].id);
-                    }
-                 }} className="text-red-400 hover:text-red-300"><Trash2 className="w-4 h-4"/></button>
+                 <div className="flex gap-2">
+                    <button onClick={toggleWallFlip} className="text-blue-400 hover:text-blue-300 p-1" title="Flip External Side">
+                        <ArrowLeftRight className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => { 
+                        if(walls.length > 1) {
+                            const newWalls = walls.filter(w => w.id !== selectedWallId);
+                            setWalls(newWalls);
+                            setSelectedWallId(newWalls[0].id);
+                        }
+                    }} className="text-red-400 hover:text-red-300 p-1"><Trash2 className="w-4 h-4"/></button>
+                 </div>
               </div>
 
               <section className="space-y-3 pt-2 border-t border-gray-800">
@@ -971,16 +1072,19 @@ const AS1684WallGenerator = () => {
                   <div>
                     <label className="text-[10px] text-gray-400">Internal</label>
                     <select value={activeWall.internalLining} onChange={e => updateActiveWall('internalLining', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-gray-200">
-                      {LINING_OPTIONS.INTERNAL.map(o => <option key={o} value={o}>{o}</option>)}
+                      {materials.filter(m => m.type !== 'external').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                     </select>
                   </div>
                   <div>
                     <label className="text-[10px] text-gray-400">External</label>
                     <select value={activeWall.externalLining} onChange={e => updateActiveWall('externalLining', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-gray-200">
-                      {LINING_OPTIONS.EXTERNAL.map(o => <option key={o} value={o}>{o}</option>)}
+                      {materials.filter(m => m.type !== 'internal').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                     </select>
                   </div>
                 </div>
+                <button onClick={toggleWallFlip} className="w-full mt-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 text-gray-300 text-xs py-1 rounded flex items-center justify-center gap-2 transition">
+                    <ArrowLeftRight className="w-3 h-3" /> Flip Internal/External Sides
+                </button>
               </section>
 
               <section className="space-y-3">
@@ -1000,6 +1104,62 @@ const AS1684WallGenerator = () => {
                 </div>
               </section>
             </>
+          )}
+
+          {/* --- TAB: MATERIALS --- */}
+          {activeTab === 'materials' && (
+            <div className="space-y-4">
+                <h3 className="text-xs font-bold text-gray-500 uppercase flex items-center gap-2"><Palette className="w-4 h-4"/> Material Creator</h3>
+                
+                <div className="bg-gray-800 p-3 rounded border border-gray-700 space-y-3">
+                    <div>
+                        <label className="text-[10px] text-gray-400">Material Name</label>
+                        <input type="text" value={newMat.name} onChange={e => setNewMat({...newMat, name: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <div>
+                            <label className="text-[10px] text-gray-400">Thickness (mm)</label>
+                            <input type="number" value={newMat.thickness} onChange={e => setNewMat({...newMat, thickness: parseFloat(e.target.value)})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" />
+                        </div>
+                        <div>
+                            <label className="text-[10px] text-gray-400">Cavity (mm)</label>
+                            <input type="number" value={newMat.cavity} onChange={e => setNewMat({...newMat, cavity: parseFloat(e.target.value)})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                         <div>
+                            <label className="text-[10px] text-gray-400">Color</label>
+                            <input type="color" value={newMat.color} onChange={e => setNewMat({...newMat, color: e.target.value})} className="w-full h-8 bg-gray-900 border border-gray-600 rounded cursor-pointer" />
+                        </div>
+                         <div>
+                            <label className="text-[10px] text-gray-400">Opacity (0-1)</label>
+                            <input type="number" step="0.1" min="0" max="1" value={newMat.opacity} onChange={e => setNewMat({...newMat, opacity: parseFloat(e.target.value)})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white" />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="text-[10px] text-gray-400">Type</label>
+                        <select value={newMat.type} onChange={e => setNewMat({...newMat, type: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white">
+                            <option value="internal">Internal</option>
+                            <option value="external">External</option>
+                            <option value="both">Both</option>
+                        </select>
+                    </div>
+                    <button onClick={addMaterial} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-1 rounded text-sm font-bold">Add Custom Material</button>
+                </div>
+
+                <div className="space-y-2">
+                    <h4 className="text-xs font-bold text-gray-400 uppercase">Available Materials</h4>
+                    {materials.filter(m => m.id !== 'none').map(m => (
+                        <div key={m.id} className="bg-gray-800 p-2 rounded border border-gray-700 flex justify-between items-center">
+                            <div>
+                                <div className="text-sm font-semibold text-gray-200">{m.name}</div>
+                                <div className="text-[10px] text-gray-500">{m.thickness}mm thick • {m.cavity}mm cavity</div>
+                            </div>
+                            <div className="w-4 h-4 rounded-full border border-gray-600" style={{backgroundColor: m.color, opacity: m.opacity}}></div>
+                        </div>
+                    ))}
+                </div>
+            </div>
           )}
 
           {/* --- TAB: BOM --- */}
