@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Download, Plus, Trash2, Settings, Move, ZoomIn, RotateCw, X, Grid, FileText, Sparkles, CheckCircle, AlertTriangle } from 'lucide-react';
 
-// --- AS 1684 CONSTANTS & LOGIC HELPERS ---
+// --- HELPERS ---
 const TIMBER_SIZES = {
   '70x35': { d: 70, t: 35, grade: 'MGP10' },
   '90x35': { d: 90, t: 35, grade: 'MGP10' },
@@ -10,6 +10,16 @@ const TIMBER_SIZES = {
 };
 
 const DEFAULT_VIEW = { rotX: 20, rotY: -35, zoom: 0.8, panX: 0, panY: 50 };
+
+// Shared rotation helper for both Canvas Render and OBJ Export
+const rotatePoint = (px, py, angleDeg) => {
+  if (!angleDeg) return { x: px, y: py };
+  const rad = angleDeg * (Math.PI / 180);
+  return {
+      x: px * Math.cos(rad) - py * Math.sin(rad),
+      y: px * Math.sin(rad) + py * Math.cos(rad)
+  };
+};
 
 const AS1684WallGenerator = () => {
   // --- STATE ---
@@ -138,9 +148,6 @@ const AS1684WallGenerator = () => {
     try {
         const { d: depth, t: thickness } = TIMBER_SIZES[studSize] || TIMBER_SIZES['90x45'];
         const components = [];
-        
-        // Track vertical members for correct noggin placement
-        // format: { x: number (left edge), type: string }
         const verticalMembers = []; 
 
         const addMember = (type, x, y, z, len, w, d_dim, color, rotation = 0) => {
@@ -151,9 +158,6 @@ const AS1684WallGenerator = () => {
         };
 
         // A. PLATES
-        // The plates need to extend to the outside face of the end studs.
-        // Since studs are centered on the grid lines (0 and wallLength), they extend
-        // by thickness/2 on each side.
         const plateStartX = -thickness / 2;
         const fullPlateLength = wallLength + thickness;
 
@@ -167,11 +171,14 @@ const AS1684WallGenerator = () => {
         } else {
           let plateX = plateStartX;
           doorOpenings.forEach(door => {
-            const doorStartX = door.startX - thickness; // Jamb stud left edge
-            if (doorStartX > plateX) {
-              addMember('Bottom Plate', plateX, 0, 0, doorStartX - plateX, thickness, depth, '#8B5A2B');
+            // FIX: Extend plate to the clear opening edge (door.startX) so it supports the Jamb Stud
+            const doorCutStart = door.startX; 
+            
+            if (doorCutStart > plateX) {
+              addMember('Bottom Plate', plateX, 0, 0, doorCutStart - plateX, thickness, depth, '#8B5A2B');
             }
-            plateX = door.startX + door.width; // Jamb stud right edge
+            // Resume plate at the end of the clear opening
+            plateX = door.startX + door.width;
           });
           const finalPlateEnd = wallLength + thickness/2;
           if (plateX < finalPlateEnd) {
@@ -179,7 +186,7 @@ const AS1684WallGenerator = () => {
           }
         }
 
-        // Top Plates (continuous)
+        // Top Plates
         addMember('Top Plate (Lower)', plateStartX, wallHeight - (thickness * 2), 0, fullPlateLength, thickness, depth, '#A0522D');
         addMember('Top Plate (Upper)', plateStartX, wallHeight - thickness, 0, fullPlateLength, thickness, depth, '#A0522D');
 
@@ -224,18 +231,16 @@ const AS1684WallGenerator = () => {
           }
         });
 
-        // C. OPENINGS (JAMBS & LINTELS)
+        // C. OPENINGS
         openings.forEach(op => {
           const { startX, width, height, sillHeight } = op;
           let lintelDepth = width > 1200 ? 190 : 140;
           const headHeight = sillHeight + height;
           
-          // Left Jamb
           const leftJambX = startX - thickness;
           addMember('Jamb Stud', leftJambX, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, '#CD853F');
           verticalMembers.push({ x: leftJambX, type: 'jamb' });
 
-          // Right Jamb
           const rightJambX = startX + width;
           addMember('Jamb Stud', rightJambX, thickness, 0, thickness, headHeight + lintelDepth - thickness, depth, '#CD853F');
           verticalMembers.push({ x: rightJambX, type: 'jamb' });
@@ -244,37 +249,26 @@ const AS1684WallGenerator = () => {
           if (sillHeight > 0) addMember('Sill Trimmer', startX, sillHeight, 0, width, thickness, depth, '#A0522D');
         });
 
-        // D. NOGGINS (SMART PLACEMENT)
-        // 1. Sort all vertical members by X position
+        // D. NOGGINS
         verticalMembers.sort((a, b) => a.x - b.x);
-        
-        // 2. Remove duplicates (rare, but possible if grid aligns perfectly with jamb)
         const uniqueVerticals = verticalMembers.filter((v, i, a) => i === 0 || Math.abs(v.x - a[i-1].x) > 1);
-
         const nogginCenter = wallHeight / 2;
 
         for (let i = 0; i < uniqueVerticals.length - 1; i++) {
             const v1 = uniqueVerticals[i];
             const v2 = uniqueVerticals[i+1];
-            
-            // Calculate gap between right edge of v1 and left edge of v2
             const gapStart = v1.x + thickness;
             const gapEnd = v2.x;
             const gapWidth = gapEnd - gapStart;
 
-            if (gapWidth < 10) continue; // Skip tiny gaps
+            if (gapWidth < 10) continue; 
 
-            // Check if this gap is INSIDE an opening
             const midX = (gapStart + gapEnd) / 2;
             let insideOpening = false;
-            
             for (const op of openings) {
-                // Buffer of 10mm to avoid edge cases
                 if (midX > op.startX && midX < op.startX + op.width) {
-                    // Check if noggin height conflicts with opening
                     const opTop = op.sillHeight + op.height;
                     const opBottom = op.sillHeight;
-                    // Standard noggins at mid-height. If opening covers mid-height, we skip.
                     if (nogginCenter > opBottom && nogginCenter < opTop) {
                         insideOpening = true;
                         break;
@@ -283,7 +277,6 @@ const AS1684WallGenerator = () => {
             }
 
             if (!insideOpening) {
-                // Stagger logic based on index
                 const yPos = (i % 2 === 0) ? nogginCenter + 25 : nogginCenter - 25;
                 addMember('Noggin', gapStart, yPos, 0, gapWidth, thickness, depth, '#BC8F8F');
             }
@@ -293,26 +286,37 @@ const AS1684WallGenerator = () => {
         if (showBracing) {
            const solidPanels = [];
            let currentStart = 0;
+           // Sort openings by X to identify solid zones between them
            const allOps = [...openings].sort((a,b) => a.startX - b.startX);
            
            allOps.forEach(op => {
-               if (op.startX > currentStart) solidPanels.push({ start: currentStart, end: op.startX });
-               currentStart = op.startX + op.width;
+               // Use a small buffer to handle stud thickness logic, but mainly prevent overlapping opening bounds
+               if (op.startX > currentStart) {
+                   solidPanels.push({ start: currentStart, end: op.startX });
+               }
+               // Advance current start to end of this opening
+               currentStart = Math.max(currentStart, op.startX + op.width);
            });
            
-           if (currentStart < wallLength) solidPanels.push({ start: currentStart, end: wallLength });
+           if (currentStart < wallLength) {
+               solidPanels.push({ start: currentStart, end: wallLength });
+           }
 
            solidPanels.forEach(panel => {
                const panelWidth = panel.end - panel.start;
+               // Ensure brace only generates in panels wide enough to support it (e.g. > 1200mm)
                if (panelWidth > 1200) {
-                   const padding = 100;
+                   const padding = 150; // Increased padding to avoid clashing with jamb studs
                    const braceRun = panelWidth - (padding * 2);
-                   const braceRise = wallHeight - 200; 
-                   const braceLen = Math.sqrt(Math.pow(braceRun, 2) + Math.pow(braceRise, 2));
-                   const angleRad = Math.atan2(braceRise, braceRun);
-                   const angleDeg = angleRad * (180 / Math.PI);
-                   
-                   addMember('Metal Brace', panel.start + padding, 100, depth, braceLen, 40, 2, '#708090', angleDeg);
+                   // Ensure run is valid
+                   if (braceRun > 500) {
+                      const braceRise = wallHeight - 200; 
+                      const braceLen = Math.sqrt(Math.pow(braceRun, 2) + Math.pow(braceRise, 2));
+                      const angleRad = Math.atan2(braceRise, braceRun);
+                      const angleDeg = angleRad * (180 / Math.PI);
+                      
+                      addMember('Metal Brace', panel.start + padding, 100, depth, braceLen, 40, 2, '#708090', angleDeg);
+                   }
                }
            });
         }
@@ -368,15 +372,6 @@ const AS1684WallGenerator = () => {
     };
 
     let allFaces = [];
-
-    const rotatePoint = (px, py, angleDeg) => {
-        if (!angleDeg) return { x: px, y: py };
-        const rad = angleDeg * (Math.PI / 180);
-        return {
-            x: px * Math.cos(rad) - py * Math.sin(rad),
-            y: px * Math.sin(rad) + py * Math.cos(rad)
-        };
-    };
 
     generateFrame.forEach(comp => {
       const { x, y, z, len, w, d, color, rotation } = comp;
@@ -435,11 +430,23 @@ const AS1684WallGenerator = () => {
     let vc = 1;
     generateFrame.forEach((m, i) => {
       obj += `o ${m.type.replace(/\s/g, '_')}_${i}\n`;
-      const v = [
-        [m.x, m.y, m.z], [m.x+m.len, m.y, m.z], [m.x+m.len, m.y+m.w, m.z], [m.x, m.y+m.w, m.z],
-        [m.x, m.y, m.z+m.d], [m.x+m.len, m.y, m.z+m.d], [m.x+m.len, m.y+m.w, m.z+m.d], [m.x, m.y+m.w, m.z+m.d]
+      
+      // VERTEX GENERATION (Corrected to apply rotation)
+      const rawVerts = [
+        {x: 0, y: 0, z: 0}, {x: m.len, y: 0, z: 0}, {x: m.len, y: m.w, z: 0}, {x: 0, y: m.w, z: 0},
+        {x: 0, y: 0, z: m.d}, {x: m.len, y: 0, z: m.d}, {x: m.len, y: m.w, z: m.d}, {x: 0, y: m.w, z: m.d}
       ];
-      v.forEach(vt => obj += `v ${vt[0]} ${vt[1]} ${vt[2]}\n`);
+
+      const v = rawVerts.map(v => {
+          const rot = rotatePoint(v.x, v.y, m.rotation);
+          // 3D files often use Y-up, but we used Z-up for timber.
+          // Let's stick to the coordinates we used in visualization: X, Y, Z
+          // Transform local to world
+          return { x: m.x + rot.x, y: m.y + rot.y, z: m.z + v.z };
+      });
+
+      v.forEach(vt => obj += `v ${vt.x.toFixed(2)} ${vt.y.toFixed(2)} ${vt.z.toFixed(2)}\n`);
+      
       const f = [[1,2,3,4],[5,8,7,6],[1,5,6,2],[2,6,7,3],[3,7,8,4],[5,1,4,8]];
       f.forEach(fa => obj += `f ${fa[0]+vc-1} ${fa[1]+vc-1} ${fa[2]+vc-1} ${fa[3]+vc-1}\n`);
       vc += 8;
